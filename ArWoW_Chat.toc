@@ -1,6 +1,6 @@
 ## Interface: 30300
 ## Title: ArWoW_Chat
-## Version: 0.1
+## Version: 1.0
 ## Author: Majed
 ## DefaultState: Enabled
 ## LoadOnDemand: 0
