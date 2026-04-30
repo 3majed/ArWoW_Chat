@@ -1,0 +1,10 @@
+## Interface: 30300
+## Title: ArWoW_Chat
+## Version: 0.1
+## Author: Majed
+## DefaultState: Enabled
+## LoadOnDemand: 0
+## SavedVariables: ArWoWChatDB
+
+Arabic_Reshaper.lua
+ArWoW_Chat.lua
