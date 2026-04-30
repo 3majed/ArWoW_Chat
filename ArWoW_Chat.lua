@@ -4,7 +4,7 @@ local chatFrameFonts, chatEditFonts, chatEditHooks, chatEditTexts = {}, {}, {}, 
 local chatPreviewFrames, chatPreviewTexts, chatNormalizeLocks = {}, {}, {}
 local bubbleProcessorFrame = CreateFrame("Frame")
 local originalChatEditSendText, presentationToBaseMap
-local filtersRegistered, fontHookInstalled, sendHookInstalled, headerHookInstalled = false, false, false, false
+local filtersRegistered, fontHookInstalled, sendHookInstalled, headerHookInstalled, elvuiHooksInstalled = false, false, false, false, false
 local WRAP_CHARACTER_LIMIT = 60
 local WRAP_REFERENCE_FONT_SIZE = 12
 local WRAP_CHARACTER_LIMIT_STEP = 6
@@ -331,18 +331,51 @@ local function ResetBubbleQueue()
    bubbleProcessorFrame.ArWoWThrottle = nil
    bubbleProcessorFrame:SetScript("OnUpdate", nil)
 end
+local function GetBubbleTextRegion(frame)
+   if (not frame or (frame.IsForbidden and frame:IsForbidden())) then return nil end
+   if (frame.isSkinnedElvUI and frame.text and frame.text.GetObjectType and frame.text:GetObjectType() == "FontString") then return frame.text end
+   local backdrop = frame.GetBackdrop and frame:GetBackdrop()
+   if (backdrop and backdrop.bgFile == "Interface\\Tooltips\\ChatBubble-Background") then
+      for i = 1, frame:GetNumRegions() do
+         local region = select(i, frame:GetRegions())
+         if (region and region.GetObjectType and region:GetObjectType() == "FontString") then return region end
+      end
+   end
+   if (frame.GetNumRegions) then
+      for i = 1, frame:GetNumRegions() do
+         local region = select(i, frame:GetRegions())
+         if (region and region.GetObjectType and region:GetObjectType() == "Texture" and region.GetTexture and region:GetTexture() == "Interface\\Tooltips\\ChatBubble-Background") then
+            for j = 1, frame:GetNumRegions() do
+               local textRegion = select(j, frame:GetRegions())
+               if (textRegion and textRegion.GetObjectType and textRegion:GetObjectType() == "FontString") then return textRegion end
+            end
+            break
+         end
+      end
+   end
+   return nil
+end
+local function ApplyBubbleFontToFrame(frame, region)
+   if (region and region.GetFont and region.SetFont) then
+      local fontFile, fontSize, fontFlags = region:GetFont()
+      if (fontFile ~= CHAT_FONT) then region:SetFont(CHAT_FONT, fontSize or 13, fontFlags or "") end
+   end
+   local nameRegion = frame and frame.Name
+   if (nameRegion and nameRegion.GetFont and nameRegion.SetFont) then
+      local fontFile, fontSize, fontFlags = nameRegion:GetFont()
+      if (fontFile ~= CHAT_FONT) then nameRegion:SetFont(CHAT_FONT, fontSize or 11, fontFlags or "") end
+   end
+end
 local function IterateBubbleTextRegions(callback)
    if (not WorldFrame or not WorldFrame.GetNumChildren) then return end
    for i = 1, WorldFrame:GetNumChildren() do
       local bubbleFrame = select(i, WorldFrame:GetChildren())
-      local backdrop = bubbleFrame and bubbleFrame.GetBackdrop and bubbleFrame:GetBackdrop()
-      if (bubbleFrame and backdrop and backdrop.bgFile == "Interface\\Tooltips\\ChatBubble-Background") then
-         for j = 1, bubbleFrame:GetNumRegions() do
-            local region = select(j, bubbleFrame:GetRegions())
-            if (region and region.GetObjectType and region:GetObjectType() == "FontString") then callback(bubbleFrame, region) end
-         end
-      end
+      local textRegion = GetBubbleTextRegion(bubbleFrame)
+      if (textRegion) then callback(bubbleFrame, textRegion) end
    end
+end
+local function ApplyBubbleFonts()
+   IterateBubbleTextRegions(function(frame, region) ApplyBubbleFontToFrame(frame, region) end)
 end
 local function NormalizeBubbleMatchText(text)
    local visibleText = StripMarkup(text or "")
@@ -436,6 +469,7 @@ local function ProcessBubbleRegion(frame, region)
       return
    end
    if (not region.GetText or not region.SetText or not region.GetFont or not region.SetFont or not region.SetJustifyH) then return end
+   ApplyBubbleFontToFrame(frame, region)
    local currentText = region:GetText() or ""
    if (currentText == "") then
       region.ArWoWLastBubbleSourceText, region.ArWoWLastBubbleProcessedText, region.ArWoWStableBubbleWidth = nil, nil, nil
@@ -447,9 +481,7 @@ local function ProcessBubbleRegion(frame, region)
       region.ArWoWLastBubbleSourceText, region.ArWoWLastBubbleProcessedText, region.ArWoWStableBubbleWidth = nil, nil, nil
       return
    end
-   local _, fontSize, fontFlags = region:GetFont()
    if (currentText ~= region.ArWoWLastBubbleProcessedText or not region.ArWoWStableBubbleWidth) then region.ArWoWStableBubbleWidth = GetBubbleRegionWidth(region) end
-   region:SetFont(CHAT_FONT, fontSize or 13, fontFlags or "")
    local bubbleText = BuildBubbleVisualText(region, logicalText, region.ArWoWStableBubbleWidth)
    if (bubbleText ~= currentText) then region:SetText(bubbleText) end
    region:SetJustifyH(BubbleNeedsRightJustify(logicalText, bubbleText) and "RIGHT" or "CENTER")
@@ -604,9 +636,47 @@ local function InstallHeaderHook()
    end)
    headerHookInstalled = true
 end
+local function InstallElvUIHooks()
+   if (elvuiHooksInstalled) then return end
+   local elvuiEngine = _G.ElvUI and _G.ElvUI[1]
+   if (not elvuiEngine or not elvuiEngine.GetModule) then return end
+   local didHook = false
+   local okChat, chatModule = pcall(elvuiEngine.GetModule, elvuiEngine, "Chat")
+   if (okChat and chatModule) then
+      hooksecurefunc(chatModule, "SetupChat", function()
+         if (not IsEnabled()) then return end
+         ApplyFonts()
+      end)
+      hooksecurefunc(chatModule, "SetChatFont", function(_, _, chatFrame)
+         if (not IsEnabled()) then return end
+         if (chatFrame) then
+            ApplyFontToChatFrame(chatFrame)
+            local editBox = chatFrame.editBox or ((chatFrame.GetName and _G[chatFrame:GetName() .. "EditBox"]) or nil)
+            if (editBox) then ApplyFontToEditBox(editBox) end
+         else
+            ApplyFonts()
+         end
+      end)
+      didHook = true
+   end
+   local okMisc, miscModule = pcall(elvuiEngine.GetModule, elvuiEngine, "Misc")
+   if (okMisc and miscModule) then
+      hooksecurefunc(miscModule, "SkinBubble", function(_, frame)
+         if (not IsEnabled() or not frame) then return end
+         ApplyBubbleFontToFrame(frame, GetBubbleTextRegion(frame))
+      end)
+      hooksecurefunc(miscModule, "UpdateBubbleBorder", function(frameOrSelf, maybeFrame)
+         if (not IsEnabled()) then return end
+         local frame = maybeFrame or frameOrSelf
+         if (frame and frame.GetObjectType) then ApplyBubbleFontToFrame(frame, GetBubbleTextRegion(frame)) end
+      end)
+      didHook = true
+   end
+   elvuiHooksInstalled = didHook
+end
 local function ApplySupport()
-   InstallSendHook() InstallFontHook() InstallHeaderHook()
-   if (IsEnabled()) then bubbleProcessorFrame.ArWoWThrottle = 0 bubbleProcessorFrame:SetScript("OnUpdate", ProcessBubbleQueue) RegisterFilters() ApplyFonts() else ResetBubbleQueue() UnregisterFilters() RestoreFonts() end
+   InstallSendHook() InstallFontHook() InstallHeaderHook() InstallElvUIHooks()
+   if (IsEnabled()) then bubbleProcessorFrame.ArWoWThrottle = 0 bubbleProcessorFrame:SetScript("OnUpdate", ProcessBubbleQueue) RegisterFilters() ApplyFonts() ApplyBubbleFonts() else ResetBubbleQueue() UnregisterFilters() RestoreFonts() end
 end
 local function SetEnabled(enabled) EnsureDB().enabled = enabled and "1" or "0" ApplySupport() end
 local function SlashCommand(msg)
@@ -625,8 +695,13 @@ addonFrame:RegisterEvent("ADDON_LOADED")
 addonFrame:RegisterEvent("UPDATE_CHAT_WINDOWS")
 addonFrame:SetScript("OnEvent", function(self, event, arg1)
    if (event == "ADDON_LOADED") then
-      if (arg1 ~= ADDON_NAME) then return end
-      EnsureDB() ApplySupport() self:UnregisterEvent("ADDON_LOADED")
+      if (arg1 == ADDON_NAME) then
+         EnsureDB() ApplySupport()
+         if ((not GetAddOnInfo) or (not GetAddOnInfo("ElvUI")) or (IsAddOnLoaded and IsAddOnLoaded("ElvUI"))) then self:UnregisterEvent("ADDON_LOADED") end
+      elseif (arg1 == "ElvUI") then
+         ApplySupport()
+         self:UnregisterEvent("ADDON_LOADED")
+      end
    elseif (event == "UPDATE_CHAT_WINDOWS") then
       ApplySupport()
    end
