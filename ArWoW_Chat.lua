@@ -1,7 +1,7 @@
 local ADDON_NAME = "ArWoW_Chat"
 local CHAT_FONT = "Interface\\AddOns\\ArWoW_Chat\\Fonts\\Janna LT Regular.ttf"
 local chatFrameFonts, chatEditFonts, chatEditHooks, chatEditTexts = {}, {}, {}, {}
-local chatPreviewFrames, chatPreviewTexts, chatNormalizeLocks = {}, {}, {}
+local chatPreviewFrames, chatPreviewTexts, chatPreviewCursors, chatNormalizeLocks = {}, {}, {}, {}
 local bubbleProcessorFrame = CreateFrame("Frame")
 local originalChatEditSendText, presentationToBaseMap
 local filtersRegistered, fontHookInstalled, sendHookInstalled, headerHookInstalled, elvuiHooksInstalled = false, false, false, false, false
@@ -28,6 +28,9 @@ local ARABIC_MOJIBAKE_MAP = {
    ["\195\166"]="\217\136", ["\195\172"]="\217\137", ["\195\173"]="\217\138", ["\195\176"]="\217\139", ["\195\177"]="\217\140", ["\195\178"]="\217\141",
    ["\195\179"]="\217\142", ["\195\181"]="\217\143", ["\195\182"]="\217\144", ["\195\184"]="\217\145", ["\195\186"]="\217\146", ["\195\191"]="\219\146",
 }
+local REVERSE_MOJIBAKE_MAP = {}
+for k, v in pairs(ARABIC_MOJIBAKE_MAP) do REVERSE_MOJIBAKE_MAP[v] = k end
+
 local function EnsureDB() if (type(ArWoWChatDB) ~= "table") then ArWoWChatDB = {} end if (ArWoWChatDB.enabled ~= "0") then ArWoWChatDB.enabled = "1" end return ArWoWChatDB end
 local function IsEnabled() return (EnsureDB().enabled == "1") end
 local function PrintStatus(message) if (DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.AddMessage and message) then DEFAULT_CHAT_FRAME:AddMessage("|cffffff00ArWoW_Chat:|r " .. message) end end
@@ -40,6 +43,12 @@ local function DecodeArabicInput(text)
    if (not text or text == "") then return text or "" end
    local out, pos, bytes = {}, 1, string.len(text)
    while (pos <= bytes) do local char, charbytes, valid = NextUtf8(text, pos) if (valid and char ~= "") then out[#out + 1] = ARABIC_MOJIBAKE_MAP[char] or char end pos = pos + charbytes end
+   return table.concat(out)
+end
+local function EncodeArabicInput(text)
+   if (not text or text == "") then return text or "" end
+   local out, pos, bytes = {}, 1, string.len(text)
+   while (pos <= bytes) do local char, charbytes, valid = NextUtf8(text, pos) if (valid and char ~= "") then out[#out + 1] = REVERSE_MOJIBAKE_MAP[char] or char end pos = pos + charbytes end
    return table.concat(out)
 end
 local function BuildPresentationMap()
@@ -66,7 +75,7 @@ local function UnshapeArabicText(text)
    return table.concat(out)
 end
 local function NormalizeArabicText(text) return UnshapeArabicText(DecodeArabicInput(text)) end
-local function ReverseArabicText(text) if (text and text ~= "" and AS_ContainsArabic and AS_ContainsArabic(text)) then return AS_UTF8reverse(text) end return text or "" end
+local function ReverseArabicText(text) if (text and text ~= "" and AS_ContainsArabic and AS_ContainsArabic(text)) then return AS_UTF8reverseRS(text) end return text or "" end
 local function IsArabicDisplayChar(char)
    return (AS_IsArabicLetter and AS_IsArabicLetter(char)) or (AS_IsDiacritic and AS_IsDiacritic(char)) or (AS_IsArabicIndicNumeral and AS_IsArabicIndicNumeral(char)) or (AS_IsArabicPunctuation and AS_IsArabicPunctuation(char))
 end
@@ -513,32 +522,111 @@ local function ShouldUsePreview(logicalText)
 end
 local function EnsurePreview(editBox)
    if (chatPreviewTexts[editBox]) then return chatPreviewTexts[editBox] end
-   local previewFrame = CreateFrame("Frame", nil, editBox)
-   if (previewFrame.SetClipsChildren) then previewFrame:SetClipsChildren(true) end
-   local previewText = previewFrame:CreateFontString(nil, "ARTWORK")
+   local previewFrame = CreateFrame("ScrollFrame", nil, editBox)
+   previewFrame:EnableMouse(false)
+   
+   local scrollChild = CreateFrame("Frame", nil, previewFrame)
+   scrollChild:SetSize(1, 1)
+   scrollChild:EnableMouse(false)
+   previewFrame:SetScrollChild(scrollChild)
+   
+   local previewText = scrollChild:CreateFontString(nil, "ARTWORK")
    previewText:SetJustifyH("RIGHT")
    previewText:SetJustifyV("MIDDLE")
    if (previewText.SetWordWrap) then previewText:SetWordWrap(false) end
    if (previewText.SetNonSpaceWrap) then previewText:SetNonSpaceWrap(false) end
-   previewFrame:Hide() previewText:Hide()
-   chatPreviewFrames[editBox], chatPreviewTexts[editBox] = previewFrame, previewText
+   
+   local cursorFrame = CreateFrame("Frame", nil, scrollChild)
+   cursorFrame:SetWidth(2)
+   cursorFrame:SetHeight(14)
+   local cursorTex = cursorFrame:CreateTexture(nil, "OVERLAY")
+   cursorTex:SetAllPoints()
+   cursorTex:SetTexture("Interface\\Buttons\\WHITE8X8")
+   
+   local elapsed = 0
+   local lastPos = -1
+   local manualHScroll = 0
+   cursorFrame:SetScript("OnUpdate", function(self, e)
+      elapsed = elapsed + e
+      if elapsed > 0.5 then
+         elapsed = 0
+         if cursorTex:IsShown() then cursorTex:Hide() else cursorTex:Show() end
+      end
+      if (not editBox:HasFocus()) then if (self:IsShown()) then self:Hide() end return end
+      local currentPos = editBox:GetCursorPosition() or 0
+      local currentText = chatEditTexts[editBox] or ""
+      local fw = previewFrame:GetWidth() or 1
+      if currentPos ~= lastPos or currentText ~= self.__lastText or self.__fw ~= fw then
+         lastPos = currentPos
+         self.__lastText = currentText
+         self.__fw = fw
+         
+         scrollChild:SetSize(fw, previewFrame:GetHeight() or 1)
+         previewFrame:SetHorizontalScroll(0)
+         
+         local prefix = string.sub(currentText, 1, currentPos)
+         if (not AS_TestLine and type(AS_CreateTestLine) == "function") then AS_CreateTestLine() end
+         local measureText = AS_TestLine and AS_TestLine.text
+         local offset = 0
+         if (measureText) then
+             local _, fontSize, fontFlags = editBox:GetFont()
+             measureText:SetWidth(4096)
+             measureText:SetFont(CHAT_FONT, fontSize or 13, fontFlags or "")
+             measureText:SetText(ShapeArabicText(prefix))
+             offset = measureText:GetStringWidth() or 0
+         end
+         
+         if (offset < manualHScroll) then manualHScroll = math.max(0, offset - 10) end
+         if (offset > manualHScroll + fw) then manualHScroll = offset - fw + 10 end
+         
+         previewText:ClearAllPoints()
+         previewText:SetPoint("RIGHT", scrollChild, "RIGHT", manualHScroll, 0)
+         
+         self:ClearAllPoints()
+         self:SetPoint("RIGHT", previewText, "RIGHT", -offset, 0)
+      end
+   end)
+
+   previewFrame:Hide() previewText:Hide() cursorFrame:Hide()
+   chatPreviewFrames[editBox], chatPreviewTexts[editBox], chatPreviewCursors[editBox] = previewFrame, previewText, cursorFrame
    return previewText
 end
 local function UpdateEditBoxLayout(editBox, logicalText)
    if (not editBox or not editBox.SetJustifyH or not editBox.SetTextColor) then return end
    local red, green, blue = GetEditBoxColor(editBox)
    local previewFrame, previewText = chatPreviewFrames[editBox], chatPreviewTexts[editBox]
+   local cursorFrame = chatPreviewCursors[editBox]
    if (ShouldUsePreview(logicalText)) then
-      previewText = EnsurePreview(editBox) previewFrame = chatPreviewFrames[editBox]
-      local leftInset = 15 + ((editBox.header and editBox.header.GetWidth and editBox.header:GetWidth()) or 0)
-      local _, fontSize, fontFlags = editBox:GetFont()
-      previewFrame:ClearAllPoints() previewFrame:SetPoint("TOPLEFT", editBox, "TOPLEFT", leftInset, 0) previewFrame:SetPoint("BOTTOMRIGHT", editBox, "BOTTOMRIGHT", -13, 0) previewFrame:Show()
-      previewText:ClearAllPoints() previewText:SetPoint("TOPLEFT", previewFrame, "TOPLEFT", 0, 0) previewText:SetPoint("BOTTOMRIGHT", previewFrame, "BOTTOMRIGHT", 0, 0)
-      previewText:SetFont(CHAT_FONT, fontSize or 13, fontFlags or "") previewText:SetTextColor(red, green, blue, 1) previewText:SetText(ShapeArabicText(logicalText)) previewText:Show()
-      editBox:SetTextColor(red, green, blue, 0) editBox:SetJustifyH("RIGHT") return
+      previewText = EnsurePreview(editBox) previewFrame = chatPreviewFrames[editBox] cursorFrame = chatPreviewCursors[editBox]
+        
+        local headerObj = editBox.header or (editBox.GetName and editBox:GetName() and _G[editBox:GetName() .. "Header"])
+        local headerWidth = (headerObj and headerObj.IsShown and headerObj:IsShown() and headerObj.GetWidth and headerObj:GetWidth()) or 0
+        local leftInset = 15 + headerWidth
+        
+        local _, fontSize, fontFlags = editBox:GetFont()
+        previewFrame:ClearAllPoints() previewFrame:SetPoint("TOPLEFT", editBox, "TOPLEFT", leftInset, 0) previewFrame:SetPoint("BOTTOMRIGHT", editBox, "BOTTOMRIGHT", -13, 0) previewFrame:Show()
+        
+        local scrollChild = previewFrame:GetScrollChild()
+        if (scrollChild) then scrollChild:SetSize(previewFrame:GetWidth() or 1, previewFrame:GetHeight() or 1) end
+        if (previewFrame.SetHorizontalScroll) then previewFrame:SetHorizontalScroll(0) end
+        
+        previewText:SetFont(CHAT_FONT, fontSize or 13, fontFlags or "") 
+        previewText:SetTextColor(red, green, blue, 1) 
+        previewText:SetText(ShapeArabicText(logicalText)) 
+        previewText:Show()
+        
+      cursorFrame:SetHeight((fontSize or 13) + 2)
+      local tex = cursorFrame:GetRegions()
+      if tex then tex:SetVertexColor(red, green, blue, 1) end
+      if editBox:HasFocus() then cursorFrame:Show() else cursorFrame:Hide() end
+      
+      editBox:SetTextColor(red, green, blue, 0)
+      editBox:SetJustifyH("RIGHT") 
+      return
    end
    if (previewFrame) then previewFrame:Hide() end
    if (previewText) then previewText:SetText("") previewText:Hide() end
+   if (cursorFrame) then cursorFrame:Hide() end
    editBox:SetTextColor(red, green, blue, 1) editBox:SetJustifyH(ShouldUsePreview(logicalText) and "RIGHT" or "LEFT")
 end
 local function RefreshEditBox(editBox)
@@ -547,13 +635,14 @@ local function RefreshEditBox(editBox)
    if (rawText == "") then chatEditTexts[editBox] = nil UpdateEditBoxLayout(editBox, nil) return end
    local logicalText = NormalizeArabicText(rawText)
    chatEditTexts[editBox] = logicalText
-   if (logicalText ~= rawText) then chatNormalizeLocks[editBox] = true editBox:SetText(logicalText) if (editBox.SetCursorPosition) then editBox:SetCursorPosition(string.len(logicalText)) end chatNormalizeLocks[editBox] = nil end
+   local encodedText = EncodeArabicInput(logicalText)
+   if (encodedText ~= rawText) then chatNormalizeLocks[editBox] = true local pos = editBox.GetCursorPosition and editBox:GetCursorPosition() editBox:SetText(encodedText) if (editBox.SetCursorPosition and pos) then editBox:SetCursorPosition(pos) elseif (editBox.SetCursorPosition) then editBox:SetCursorPosition(string.len(encodedText)) end chatNormalizeLocks[editBox] = nil end
    UpdateEditBoxLayout(editBox, logicalText)
 end
 local function InstallEditHooks(editBox)
    if (not editBox or not editBox.HookScript or chatEditHooks[editBox]) then return end
    editBox:HookScript("OnTextChanged", function(self) if (chatNormalizeLocks[self]) then return end if (not IsEnabled()) then chatEditTexts[self] = nil UpdateEditBoxLayout(self, nil) return end RefreshEditBox(self) end)
-   editBox:HookScript("OnMouseUp", function(self) local logicalText = chatEditTexts[self] if (logicalText and ShouldUsePreview(logicalText)) then ClearHighlight(self) UpdateEditBoxLayout(self, logicalText) end end)
+   editBox:HookScript("OnMouseUp", function(self) local logicalText = chatEditTexts[self] if (logicalText and ShouldUsePreview(logicalText)) then ClearHighlight(self) if (self.SetCursorPosition) then self:SetCursorPosition(string.len(self:GetText() or "")) end UpdateEditBoxLayout(self, logicalText) end end)
    editBox:HookScript("OnEditFocusGained", function(self) UpdateEditBoxLayout(self, chatEditTexts[self]) end)
    chatEditHooks[editBox] = true
 end
