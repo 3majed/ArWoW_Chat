@@ -1,5 +1,6 @@
 ## Interface: 30300
 ## Title: ArWoW_Chat
+## Notes: Enables Arabic text support in chat.
 ## Version: 1.0
 ## Author: Majed
 ## DefaultState: Enabled
@@ -8,3 +9,4 @@
 
 Arabic_Reshaper.lua
 ArWoW_Chat.lua
+Compatibility.lua
