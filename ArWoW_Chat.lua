@@ -7,8 +7,8 @@ local CHAT_FONT = "Interface\\AddOns\\ArWoW_Chat\\Fonts\\JannaLT-Prototype.ttf"
 local chatFrameFonts, chatEditFonts, chatEditHooks, chatEditTexts = {}, {}, {}, {}
 local chatPreviewFrames, chatPreviewTexts, chatPreviewCursors, chatNormalizeLocks = {}, {}, {}, {}
 local bubbleProcessorFrame = CreateFrame("Frame")
-local originalChatEditSendText, presentationToBaseMap
-local filtersRegistered, fontHookInstalled, sendHookInstalled, headerHookInstalled = false, false, false, false
+local presentationToBaseMap
+local filtersRegistered, fontHookInstalled, headerHookInstalled = false, false, false
 
 -- Wrapping Constraints
 local WRAP_CHARACTER_LIMIT = 60
@@ -1038,6 +1038,19 @@ local function InstallEditHooks(editBox)
       UpdateEditBoxLayout(self, chatEditTexts[self]) 
    end)
    
+   local oldOnEnter = editBox:GetScript("OnEnterPressed")
+   if (oldOnEnter) then
+      editBox:SetScript("OnEnterPressed", function(self)
+         if (IsEnabled() and chatEditTexts[self]) then
+            chatNormalizeLocks[self] = true
+            self:SetText(chatEditTexts[self])
+            chatNormalizeLocks[self] = nil
+         end
+         oldOnEnter(self)
+         chatEditTexts[self] = nil
+      end)
+   end
+   
    chatEditHooks[editBox] = true
 end
 local function ApplyFontToChatFrame(chatFrame)
@@ -1158,27 +1171,6 @@ local function UnregisterFilters()
    filtersRegistered = false 
 end
 
-local function InstallSendHook()
-   if (sendHookInstalled or not ChatEdit_SendText) then return end
-   
-   originalChatEditSendText = ChatEdit_SendText
-   ChatEdit_SendText = function(editBox, addHistory)
-      if (not IsEnabled() or not editBox or not editBox.GetText or not editBox.SetText) then 
-         return originalChatEditSendText(editBox, addHistory) 
-      end
-      
-      local rawText = editBox:GetText() or ""
-      local logicalText = chatEditTexts[editBox] or NormalizeArabicInput(rawText)
-      
-      if (logicalText ~= rawText) then editBox:SetText(logicalText) end
-      chatEditTexts[editBox] = nil
-      
-      return originalChatEditSendText(editBox, addHistory)
-   end
-   
-   sendHookInstalled = true
-end
-
 local function InstallFontHook()
    if (fontHookInstalled) then return end
    
@@ -1232,7 +1224,6 @@ ns.GetLogicalEditText = function(editBox) return chatEditTexts[editBox] end
 -- Registration & Event Handling
 -- ============================================================================
 local function ApplySupport()
-   InstallSendHook() 
    InstallFontHook() 
    InstallHeaderHook()
    
