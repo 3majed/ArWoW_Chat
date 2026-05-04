@@ -15,7 +15,6 @@ ArWoW Chat is a World of Warcraft (3.3.5a) addon designed to seamlessly enable A
 
 ## أهم المميزات
 - **دعم الكتابة وربط الحروف (RTL):** يضبط لك النص تلقائياً داخل نوافذ الشات، فقاعات الكلام فوق الشخصيات (Chat Bubbles)، ومربع الكتابة.
-- **النسخ واللصق شغال:** تقدر تنسخ أي نص عربي من الشات بدون ما ينعفس أو تخرب الحروف.
 - **ما يحوس اللغات الثانية:** الأدون يتجاهل النصوص الأجنبية عشان يضمن إن اللغات الثانية مثل الإسبانية والفرنسية والتشيكية تطلع بشكلها الصحيح وتشتغل تمام.
 - **متوافق مع إضافات ثانية (Addons):** يشتغل معاك مثل الحلاوة ومندمج جاهز مع أشهر إضافات الواجهة والشات، مثل:
   - ElvUI
@@ -28,7 +27,7 @@ ArWoW Chat is a World of Warcraft (3.3.5a) addon designed to seamlessly enable A
 
 ## مشاكل معروفة (كلاينت 3.3.5a)
 بسبب حدود الكلاينت (3.3.5a) القديم، فيه كم حاجة للحين:
-- **النسخ للديسكورد:** إذا نسخت محادثة عربية من اللعبة ولصقتها في ديسكورد، النص ممكن يطلع ملخبط أو معكوس.
+- **نسخ النص العربي:** إذا نسخت محادثة عربية من اللعبة ولصقتها في ديسكورد أو أي برنامج محادثة ثانية، النص ممكن يطلع ملخبط أو معكوس.
 - **تحديد النص بالماوس:** التظليل أو تحديد الكلام بالماوس في مربع الكتابة ما راح يكون دقيق.
 - **التعديل وسط الكلمة:** الكليك بالماوس في نص الكلمة العربية عشان تعدلها ما راح يحط المؤشر في المكان الصح (الأفضل تستخدم أسهم الكيبورد أو تمسح الكلمة).
 
@@ -36,7 +35,6 @@ ArWoW Chat is a World of Warcraft (3.3.5a) addon designed to seamlessly enable A
 
 ## Features
 - **Native Arabic Shaping & RTL:** Automatically shapes text in chat frames, chat bubbles, and the chat edit input box.
-- **Copy & Paste Support:** Preserves Arabic unicode structure when copying text from the chat window.
 - **European Language Friendly:** Skips shaping non-Arabic text to prevent mangling of other languages (e.g., Spanish, French, Czech).
 - **Extensive Addon Compatibility:** Natively integrates with custom UI and chat addons out of the box, including:
   - ElvUI
@@ -49,7 +47,7 @@ ArWoW Chat is a World of Warcraft (3.3.5a) addon designed to seamlessly enable A
 
 ## Known Issues & Limitations
 Due to the technical limitations of the 3.3.5a game client, the following issues are known:
-- **Pasting to Discord:** Copying an Arabic chat from the game and pasting it into Discord may result in a reversed or garbled output.
+- **Copying arabic text:** Copying an Arabic chat from the game and pasting it into Discord or any other chat may result in a reversed or garbled output.
 - **Mouse Selection:** Highlighting or selecting text with the mouse within the chat edit box does not behave accurately for RTL shaped text.
 - **Cursor Placement:** Clicking the mouse in the middle of an Arabic word in the text box to edit it will not place the cursor precisely (it is highly recommended to use the keyboard arrow keys instead).
 
