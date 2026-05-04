@@ -1008,6 +1008,10 @@ end
 local function InstallEditHooks(editBox)
    if (not editBox or not editBox.HookScript or chatEditHooks[editBox]) then return end
    
+   if (editBox.SetAltArrowKeyMode) then
+      editBox:SetAltArrowKeyMode(false)
+   end
+   
    editBox:HookScript("OnTextChanged", function(self) 
       if (chatNormalizeLocks[self]) then return end 
       
