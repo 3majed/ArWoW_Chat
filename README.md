@@ -2,7 +2,7 @@
 
 <!-- Images can be placed here once hosted online -->
 ![Chat 1](https://cdn.discordapp.com/attachments/956515329608151121/1500637904957997096/Screenshot_2026-05-04_020409.png?ex=69f92975&is=69f7d7f5&hm=753a4fac187ffb8dae02b59f65a22aa5eeb684014a0b1a2b80385bf9a8f551fa&)
-![Chat 2](https://cdn.discordapp.com/attachments/956515329608151121/1500637904957997096/Screenshot_2026-05-04_020409.png?ex=69f92975&is=69f7d7f5&hm=753a4fac187ffb8dae02b59f65a22aa5eeb684014a0b1a2b80385bf9a8f551fa&)
+![Chat 2](https://cdn.discordapp.com/attachments/956515329608151121/1500651209281900615/Screenshot_2026-05-04_020356.png?ex=69f935d9&is=69f7e459&hm=1dbdd8dc3eda1a6b3be7176ba6228ad189539f203dc6a7ccea4a9c83534c5705&)
 ![Chat 3](https://cdn.discordapp.com/attachments/956515329608151121/1500637905570365561/Screenshot_2026-05-04_020525.png?ex=69f92975&is=69f7d7f5&hm=06a397c009b27ac74a349609f0e4fec507d615740e8b4a1cfa530d1a10ce4706&)
 
 <div dir="rtl" align="right">
