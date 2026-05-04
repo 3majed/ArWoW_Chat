@@ -6,6 +6,8 @@ local pratHooked = false
 local chatterHooked = false
 local dragonUIHooked = false
 local leatrixHooked = false
+local wimHooked = false
+local bcmHooked = false
 
 -- ============================================================================
 -- ElvUI Compatibility Support
@@ -293,6 +295,107 @@ local function InstallLeatrixHooks()
 end
 
 -- ============================================================================
+-- WIM (WoW Instant Messenger) Compatibility Support
+-- ============================================================================
+local function InstallWIMHooks()
+   if (not IsAddOnLoaded("WIM") or type(_G.WIM) ~= "table") then 
+      return false 
+   end
+   
+   -- 1. Create a WIM module to catch dynamically created windows
+   if (type(_G.WIM.CreateModule) == "function" and not _G.WIM.modules["ArWoW_Chat"]) then
+      local wimMod = _G.WIM.CreateModule("ArWoW_Chat", true)
+      
+      function wimMod:OnWindowCreated(win)
+         if (not ns.IsEnabled() or not win or not win.widgets) then return end
+         
+         -- Apply font to history/chat display frame
+         if (win.widgets.chat_display) then
+            ns.ApplyFontToChatFrame(win.widgets.chat_display)
+         end
+         
+         -- Apply font and Logic override to EditBox
+         if (win.widgets.msg_box) then
+            ns.ApplyFontToEditBox(win.widgets.msg_box)
+         end
+      end
+      
+      function wimMod:OnWindowShow(win)
+         if (not ns.IsEnabled() or not win or not win.widgets) then return end
+         
+         -- Re-apply in case WIM dynamically reset fonts or recycled the window
+         if (win.widgets.chat_display) then
+            local _, size, flags = win.widgets.chat_display:GetFont()
+            win.widgets.chat_display:SetFont(ns.CHAT_FONT, size or 13, flags or "")
+         end
+         
+         if (win.widgets.msg_box) then
+            local _, size, flags = win.widgets.msg_box:GetFont()
+            win.widgets.msg_box:SetFont(ns.CHAT_FONT, size or 13, flags or "")
+         end
+      end
+      
+      -- Catch any windows that WIM might have already created before this script runs
+      if (_G.WIM.windows and _G.WIM.windows.active) then
+         for _, list in pairs(_G.WIM.windows.active) do
+            for _, win in pairs(list) do
+               wimMod:OnWindowCreated(win)
+            end
+         end
+      end
+   end
+   
+   -- 2. Hook PreSendFilterText to restore Logical text instead of what the UI holds visually
+   if (type(_G.WIM.RegisterPreSendFilterText) == "function") then
+      _G.WIM.RegisterPreSendFilterText(function(text)
+         if (not ns.IsEnabled() or not _G.WIM.EditBoxInFocus) then return text end
+         
+         local logical = ns.GetLogicalEditText(_G.WIM.EditBoxInFocus)
+         if (logical and logical ~= "") then
+            return logical
+         end
+         
+         return text
+      end)
+   end
+   
+   return true
+end
+
+-- ============================================================================
+-- BasicChatMods Compatibility Support
+-- Hooks the BasicChatMods Copy Window EditBox
+-- ============================================================================
+local function InstallBasicChatModsHooks()
+   if (not IsAddOnLoaded("BasicChatMods") or not _G.BCMCopyBox) then 
+      return false 
+   end
+   
+   local didHook = false
+   
+   if (not _G.BCMCopyBox.ArWoWHooked) then
+      local _, size, flags = _G.BCMCopyBox:GetFont()
+      _G.BCMCopyBox:SetFont(ns.CHAT_FONT, size or 13, flags or "")
+      
+      -- BasicChatMods uses a MultiLine EditBox which breaks UTF-8 Arabic words natively.
+      -- Widening it prevents Blizzard's native system from wrapping words, retaining shaping.
+      _G.BCMCopyBox:SetWidth(4000)
+      
+      _G.BCMCopyBox:HookScript("OnShow", function(self)
+         if (not ns.IsEnabled()) then return end
+         local _, csize, cflags = self:GetFont()
+         self:SetFont(ns.CHAT_FONT, csize or 13, cflags or "")
+         self:SetWidth(4000)
+      end)
+      
+      _G.BCMCopyBox.ArWoWHooked = true
+      didHook = true
+   end
+   
+   return didHook
+end
+
+-- ============================================================================
 -- Primary Compatibility Entry Point
 -- Called directly from ArWoW_Chat.lua -> ApplySupport()
 -- ============================================================================
@@ -316,5 +419,13 @@ function ns.InstallCompatibilityHooks()
    
    if (not leatrixHooked) then
       leatrixHooked = InstallLeatrixHooks()
+   end
+   
+   if (not wimHooked) then
+      wimHooked = InstallWIMHooks()
+   end
+   
+   if (not bcmHooked) then
+      bcmHooked = InstallBasicChatModsHooks()
    end
 end

@@ -23,6 +23,8 @@ ArWoW Chat is a World of Warcraft (3.3.5a) addon designed to seamlessly enable A
   - Chatter
   - DragonUI
   - Leatrix Plus
+  - WIM (WoW Instant Messenger)
+  - BasicChatMods (BCM)
 
 ## مشاكل معروفة (كلاينت 3.3.5a)
 بسبب حدود الكلاينت (3.3.5a) القديم، فيه كم حاجة للحين:
@@ -42,6 +44,8 @@ ArWoW Chat is a World of Warcraft (3.3.5a) addon designed to seamlessly enable A
   - Chatter
   - DragonUI
   - Leatrix Plus
+  - WIM (WoW Instant Messenger)
+  - BasicChatMods (BCM)
 
 ## Known Issues & Limitations
 Due to the technical limitations of the 3.3.5a game client, the following issues are known:

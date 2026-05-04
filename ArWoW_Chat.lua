@@ -1226,6 +1226,7 @@ ns.ApplyBubbleFontToFrame = ApplyBubbleFontToFrame
 ns.GetBubbleTextRegion = GetBubbleTextRegion
 ns.ProcessBubbleRegion = ProcessBubbleRegion
 ns.NormalizeArabicText = NormalizeArabicText
+ns.GetLogicalEditText = function(editBox) return chatEditTexts[editBox] end
 
 -- ============================================================================
 -- Registration & Event Handling
@@ -1293,11 +1294,13 @@ addonFrame:SetScript("OnEvent", function(self, event, arg1)
          local waitForChatter = (GetAddOnInfo and GetAddOnInfo("Chatter")) and not (IsAddOnLoaded and IsAddOnLoaded("Chatter"))
          local waitForDragonUI = (GetAddOnInfo and GetAddOnInfo("DragonUI")) and not (IsAddOnLoaded and IsAddOnLoaded("DragonUI"))
          local waitForLeatrix = (GetAddOnInfo and GetAddOnInfo("Leatrix_Plus")) and not (IsAddOnLoaded and IsAddOnLoaded("Leatrix_Plus"))
+         local waitForWIM = (GetAddOnInfo and GetAddOnInfo("WIM")) and not (IsAddOnLoaded and IsAddOnLoaded("WIM"))
+         local waitForBCM = (GetAddOnInfo and GetAddOnInfo("BasicChatMods")) and not (IsAddOnLoaded and IsAddOnLoaded("BasicChatMods"))
          
-         if (not waitForElvUI and not waitForPrat and not waitForChatter and not waitForDragonUI and not waitForLeatrix) then 
+         if (not waitForElvUI and not waitForPrat and not waitForChatter and not waitForDragonUI and not waitForLeatrix and not waitForWIM and not waitForBCM) then 
             self:UnregisterEvent("ADDON_LOADED") 
          end
-      elseif (arg1 == "ElvUI" or arg1 == "Prat-3.0" or arg1 == "Chatter" or arg1 == "DragonUI" or arg1 == "Leatrix_Plus") then
+      elseif (arg1 == "ElvUI" or arg1 == "Prat-3.0" or arg1 == "Chatter" or arg1 == "DragonUI" or arg1 == "Leatrix_Plus" or arg1 == "WIM" or arg1 == "BasicChatMods") then
          ApplySupport()
          
          local waitForElvUI = (GetAddOnInfo and GetAddOnInfo("ElvUI")) and not (IsAddOnLoaded and IsAddOnLoaded("ElvUI"))
@@ -1305,8 +1308,10 @@ addonFrame:SetScript("OnEvent", function(self, event, arg1)
          local waitForChatter = (GetAddOnInfo and GetAddOnInfo("Chatter")) and not (IsAddOnLoaded and IsAddOnLoaded("Chatter"))
          local waitForDragonUI = (GetAddOnInfo and GetAddOnInfo("DragonUI")) and not (IsAddOnLoaded and IsAddOnLoaded("DragonUI"))
          local waitForLeatrix = (GetAddOnInfo and GetAddOnInfo("Leatrix_Plus")) and not (IsAddOnLoaded and IsAddOnLoaded("Leatrix_Plus"))
+         local waitForWIM = (GetAddOnInfo and GetAddOnInfo("WIM")) and not (IsAddOnLoaded and IsAddOnLoaded("WIM"))
+         local waitForBCM = (GetAddOnInfo and GetAddOnInfo("BasicChatMods")) and not (IsAddOnLoaded and IsAddOnLoaded("BasicChatMods"))
          
-         if (not waitForElvUI and not waitForPrat and not waitForChatter and not waitForDragonUI and not waitForLeatrix) then
+         if (not waitForElvUI and not waitForPrat and not waitForChatter and not waitForDragonUI and not waitForLeatrix and not waitForWIM and not waitForBCM) then
             self:UnregisterEvent("ADDON_LOADED")
          end
       end
