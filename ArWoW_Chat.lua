@@ -3,7 +3,7 @@ local ADDON_NAME, ns = ...
 -- ============================================================================
 -- Configuration & State Variables
 -- ============================================================================
-local CHAT_FONT = "Interface\\AddOns\\ArWoW_Chat\\Fonts\\JannaLT-Prototype.ttf"
+local CHAT_FONT = "Interface\\AddOns\\ArWoW_Chat\\Fonts\\JannaLT-Prototype-Regular.ttf"
 local chatFrameFonts, chatEditFonts, chatEditHooks, chatEditTexts = {}, {}, {}, {}
 local chatPreviewFrames, chatPreviewTexts, chatPreviewCursors, chatNormalizeLocks = {}, {}, {}, {}
 local bubbleProcessorFrame = CreateFrame("Frame")
