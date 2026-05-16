@@ -8,5 +8,6 @@
 ## SavedVariables: ArWoWChatDB
 
 Arabic_Reshaper.lua
+Bubbles_AR.lua
 ArWoW_Chat.lua
 Compatibility.lua
