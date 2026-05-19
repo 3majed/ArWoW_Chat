@@ -3,7 +3,7 @@ local ADDON_NAME, ns = ...
 -- ============================================================================
 -- Configuration & State Variables
 -- ============================================================================
-local CHAT_FONT = "Interface\\AddOns\\ArWoW_Chat\\Fonts\\JannaLT-Prototype-Regular.ttf"
+local CHAT_FONT = "Interface\\AddOns\\ArWoW_Chat\\Fonts\\Prototype_Arabic_Final.ttf"
 local chatFrameFonts, chatEditFonts, chatEditHooks, chatEditTexts = {}, {}, {}, {}
 local chatPreviewFrames, chatPreviewTexts, chatPreviewCursors, chatNormalizeLocks = {}, {}, {}, {}
 local bubbleProcessorFrame = CreateFrame("Frame")
@@ -71,6 +71,7 @@ local ARABIC_MOJIBAKE_MAP = {
 local function EnsureDB() 
    if (type(ArWoWChatDB) ~= "table") then ArWoWChatDB = {} end 
    if (ArWoWChatDB.enabled ~= "0") then ArWoWChatDB.enabled = "1" end 
+   if (type(ArWoWChatDB.untranslatedBubbleHashes) ~= "table") then ArWoWChatDB.untranslatedBubbleHashes = {} end
    return ArWoWChatDB 
 end
 
@@ -696,6 +697,44 @@ local function BuildBubbleHashTexts(baseText, context)
    return results
 end
 
+local function BuildBubbleHashCandidates(sourceText, speakerName)
+   local normalizedText = NormalizeBubbleTranslationKey(sourceText)
+   if (normalizedText == "") then return nil, nil, nil end
+
+   local context = BuildLookupContext(speakerName)
+   local hashTexts = BuildBubbleHashTexts(normalizedText, context)
+   local speakerIsTimekeeper = IsTimekeeperSpeaker(context.speakerName)
+   local candidates, seenHashes = {}, {}
+
+   for i = 1, #hashTexts do
+      local hashText = hashTexts[i]
+      if (speakerIsTimekeeper) then hashText = string.gsub(hashText, "%d", "") end
+      hashText = TrimText(hashText)
+
+      if (hashText ~= "") then
+         local hashValue = IsHonorTemplate(hashText) and HONOR_TEMPLATE_HASH or AddonStringHash(hashText)
+         if (not seenHashes[hashValue]) then
+            seenHashes[hashValue] = true
+            candidates[#candidates + 1] = { hash = hashValue, text = hashText }
+         end
+      end
+   end
+
+   return candidates, normalizedText, context
+end
+
+local function RememberMissingBubbleHashes(hashCandidates)
+   if (not hashCandidates or #hashCandidates == 0) then return end
+
+   local store = EnsureDB().untranslatedBubbleHashes
+   for i = 1, #hashCandidates do
+      local candidate = hashCandidates[i]
+      if (candidate and candidate.hash and candidate.text and candidate.text ~= "" and not store[candidate.hash]) then
+         store[candidate.hash] = candidate.text
+      end
+   end
+end
+
 local function ExpandBubbleTranslationText(text, context)
    if (not text or text == "") then return text or "" end
 
@@ -716,25 +755,17 @@ local function ExpandBubbleTranslationText(text, context)
 end
 
 local function ResolveBubbleTranslation(sourceText, speakerName)
-   if (not HasBubbleTranslationTable()) then return nil end
+   local hashCandidates, normalizedText, context = BuildBubbleHashCandidates(sourceText, speakerName)
+   if (not hashCandidates or #hashCandidates == 0) then return nil, nil, normalizedText end
 
-   local normalizedText = NormalizeBubbleTranslationKey(sourceText)
-   if (normalizedText == "") then return nil end
-
-   local context = BuildLookupContext(speakerName)
-   local hashTexts = BuildBubbleHashTexts(normalizedText, context)
-   local speakerIsTimekeeper = IsTimekeeperSpeaker(context.speakerName)
-
-   for i = 1, #hashTexts do
-      local hashText = hashTexts[i]
-      if (speakerIsTimekeeper) then hashText = string.gsub(hashText, "%d", "") end
-
-      local hashValue = IsHonorTemplate(hashText) and HONOR_TEMPLATE_HASH or AddonStringHash(hashText)
-      local translation = BB_Bubbles[hashValue]
-      if (translation) then return ExpandBubbleTranslationText(translation, context) end
+   if (HasBubbleTranslationTable()) then
+      for i = 1, #hashCandidates do
+         local translation = BB_Bubbles[hashCandidates[i].hash]
+         if (translation) then return ExpandBubbleTranslationText(translation, context), hashCandidates, normalizedText end
+      end
    end
 
-   return nil
+   return nil, hashCandidates, normalizedText
 end
 
 local function PurgeBubbleCache(now)
@@ -764,14 +795,15 @@ local function GetRememberedBubbleTranslation(sourceText)
    if (entry) then recentBubbleTranslations[cacheKey] = nil end
    return nil
 end
+
 -- ============================================================================
 -- Chat Prefix & Hooked Message Display
 -- ============================================================================
-local function BuildLanguagePrefix(chatFrame, languageName) 
-   if (languageName and languageName ~= "" and languageName ~= "Universal" and languageName ~= chatFrame.defaultLanguage) then 
-      return "[" .. languageName .. "] " 
-   end 
-   return "" 
+local function BuildLanguagePrefix(chatFrame, languageName)
+   if (languageName and languageName ~= "" and languageName ~= "Universal" and languageName ~= chatFrame.defaultLanguage) then
+      return "[" .. languageName .. "] "
+   end
+   return ""
 end
 
 StripRealm = function(name)
@@ -779,50 +811,50 @@ StripRealm = function(name)
    return (dashPos and dashPos > 1) and string.sub(name, 1, dashPos - 1) or (name or "")
 end
 
-local function GetChatTimestampPrefix() 
-   if (CHAT_TIMESTAMP_FORMAT and BetterDate) then return BetterDate(CHAT_TIMESTAMP_FORMAT, time()) end 
-   return "" 
+local function GetChatTimestampPrefix()
+   if (CHAT_TIMESTAMP_FORMAT and BetterDate) then return BetterDate(CHAT_TIMESTAMP_FORMAT, time()) end
+   return ""
 end
 
 local function GetLeatrixTimestampPrefix(chatFrame)
-   if (not chatFrame or not chatFrame.LeaPlusChatTimestampHooked or CHAT_TIMESTAMP_FORMAT or not LeaPlusDB or LeaPlusDB.ChatTimestamps ~= "On") then 
-      return "" 
+   if (not chatFrame or not chatFrame.LeaPlusChatTimestampHooked or CHAT_TIMESTAMP_FORMAT or not LeaPlusDB or LeaPlusDB.ChatTimestamps ~= "On") then
+      return ""
    end
-   
+
    local formats = { [1] = "%I:%M:%S %p", [2] = "%I:%M %p", [3] = "%X", [4] = "%H:%M", [5] = "%M:%S", [6] = "%I:%M:%S" }
    local ok, stamp = pcall(date, "[" .. (formats[LeaPlusDB.ChatTimestampFormatMenu] or "%X") .. "]")
-   
+
    if (not ok or not stamp) then stamp = date("[%X]") end
    if (LeaPlusDB.ChatTimestampUseChannelColor == "On") then return stamp end
-   
-   return string.format("|cff%02x%02x%02x%s|r", 
-      math.floor((LeaPlusDB.ChatTimestampRed or 115) + 0.5), 
-      math.floor((LeaPlusDB.ChatTimestampGreen or 115) + 0.5), 
-      math.floor((LeaPlusDB.ChatTimestampBlue or 115) + 0.5), 
+
+   return string.format("|cff%02x%02x%02x%s|r",
+      math.floor((LeaPlusDB.ChatTimestampRed or 115) + 0.5),
+      math.floor((LeaPlusDB.ChatTimestampGreen or 115) + 0.5),
+      math.floor((LeaPlusDB.ChatTimestampBlue or 115) + 0.5),
       stamp
    )
 end
 
 local function BuildVisiblePrefix(chatFrame, eventName, speakerName, languageName, channelName)
-   local prefix = GetChatTimestampPrefix() 
+   local prefix = GetChatTimestampPrefix()
    if (prefix == "") then prefix = GetLeatrixTimestampPrefix(chatFrame) end
-   
+
    if (eventName == "CHAT_MSG_TEXT_EMOTE") then return StripMarkup(prefix) end
-   
+
    local visibleSpeaker, languagePrefix = StripRealm(speakerName), BuildLanguagePrefix(chatFrame, languageName)
-   
+
    if (eventName == "CHAT_MSG_CHANNEL") then
       local cleanChannel = string.gsub(channelName or "", "%s%-%s.*", "")
       local ok, bodyPrefix = pcall(format, StripMarkup(CHAT_CHANNEL_GET or "%s: ") .. languagePrefix, "[" .. visibleSpeaker .. "]")
       return StripMarkup(prefix) .. ((cleanChannel ~= "") and ("[" .. cleanChannel .. "] ") or "") .. (ok and bodyPrefix or "")
    end
-   
+
    local template = PREFIX_FORMATS[eventName] and _G[PREFIX_FORMATS[eventName]] or nil
    if (not template) then return StripMarkup(prefix) end
-   
+
    local speakerToken = (eventName == "CHAT_MSG_EMOTE" or eventName == "CHAT_MSG_MONSTER_EMOTE" or eventName == "CHAT_MSG_RAID_BOSS_EMOTE") and visibleSpeaker or ("[" .. visibleSpeaker .. "]")
    local ok, bodyPrefix = pcall(format, StripMarkup(template) .. languagePrefix, speakerToken)
-   
+
    return StripMarkup(prefix) .. (ok and bodyPrefix or "")
 end
 
@@ -841,21 +873,27 @@ end
 local function BuildWrappedMessage(chatFrame, eventName, messageText, speakerName, languageName, channelName)
    local logicalText
    if (IsNpcTranslationEvent(eventName)) then
-      logicalText = ResolveBubbleTranslation(messageText, speakerName)
-      if (logicalText and logicalText ~= "") then RememberBubbleTranslation(messageText, logicalText) end
+      local hashCandidates
+      logicalText, hashCandidates = ResolveBubbleTranslation(messageText, speakerName)
+      if (logicalText and logicalText ~= "") then
+         RememberBubbleTranslation(messageText, logicalText)
+      else
+         RememberMissingBubbleHashes(hashCandidates)
+      end
    end
 
    if (not logicalText or logicalText == "") then
       logicalText = NormalizeArabicText(messageText)
       if (not logicalText or logicalText == "" or not AS_ContainsArabic or not AS_ContainsArabic(logicalText)) then return nil end
    end
-   
+
    local prefixText = BuildVisiblePrefix(chatFrame, eventName, speakerName, languageName, channelName)
    local wrapLimit = GetWrapCharacterLimit(chatFrame)
    local firstLineLimit = math.max(wrapLimit - Utf8Length(prefixText), 1)
-   
+
    return BuildWrappedVisualText(logicalText, firstLineLimit, wrapLimit)
 end
+
 -- ============================================================================
 -- Chat Bubble 3D Overrides
 -- ============================================================================
@@ -868,7 +906,7 @@ end
 local function GetBubbleTextRegion(frame)
    if (not frame or (frame.IsForbidden and frame:IsForbidden())) then return nil end
    if (frame.isSkinnedElvUI and frame.text and not frame.text.ArWoWIsBubbleOverlay and frame.text.GetObjectType and frame.text:GetObjectType() == "FontString") then return frame.text end
-   
+
    local backdrop = frame.GetBackdrop and frame:GetBackdrop()
    if (backdrop and backdrop.bgFile == "Interface\\Tooltips\\ChatBubble-Background") then
       for i = 1, frame:GetNumRegions() do
@@ -876,7 +914,7 @@ local function GetBubbleTextRegion(frame)
          if (region and not region.ArWoWIsBubbleOverlay and region.GetObjectType and region:GetObjectType() == "FontString") then return region end
       end
    end
-   
+
    if (frame.GetNumRegions) then
       for i = 1, frame:GetNumRegions() do
          local region = select(i, frame:GetRegions())
@@ -1540,6 +1578,22 @@ local function SetEnabled(enabled)
    ApplySupport() 
 end
 
+local function CountEntries(tableValue)
+   local count = 0
+   for _ in pairs(tableValue or {}) do count = count + 1 end
+   return count
+end
+
+local function ClearSavedVariables()
+   local db = EnsureDB()
+   local clearedCount = CountEntries(db.untranslatedBubbleHashes)
+
+   db.untranslatedBubbleHashes = {}
+   for key in pairs(recentBubbleTranslations) do recentBubbleTranslations[key] = nil end
+
+   PrintStatus("Cleared " .. tostring(clearedCount) .. " saved untranslated NPC chat hashes.")
+end
+
 local function SlashCommand(msg)
    msg = string.lower(string.gsub(msg or "", "^%s*(.-)%s*$", "%1"))
    if (msg == "" or msg == "toggle") then 
@@ -1548,24 +1602,42 @@ local function SlashCommand(msg)
       SetEnabled(true)
    elseif (msg == "off" or msg == "disable") then 
       SetEnabled(false)
+   elseif (msg == "clear") then
+      ClearSavedVariables()
+      return
    elseif (msg ~= "status") then 
-      PrintStatus("Usage: /archat on|off|toggle|status") 
+      PrintStatus("Usage: /archat on|off|toggle|status|clear") 
       return 
    end
    
    PrintStatus(IsEnabled() and "Arabic chat is enabled." or "Arabic chat is disabled.")
 end
 
+local function QtrSlashCommand(msg)
+   msg = string.lower(string.gsub(msg or "", "^%s*(.-)%s*$", "%1"))
+   if (msg == "chat clear") then
+      ClearSavedVariables()
+      return
+   end
+
+   PrintStatus("Usage: /qtr chat clear")
+end
+
 SlashCmdList.ARWOW_CHAT = SlashCommand
 SLASH_ARWOW_CHAT1 = "/archat"
 SLASH_ARWOW_CHAT2 = "/arwowchat"
+SlashCmdList.ARWOW_QTR = QtrSlashCommand
+SLASH_ARWOW_QTR1 = "/qtr"
 
 local addonFrame = CreateFrame("Frame", "ArWoW_ChatFrame")
 addonFrame:RegisterEvent("ADDON_LOADED")
 addonFrame:RegisterEvent("PLAYER_LOGIN")
 addonFrame:RegisterEvent("UPDATE_CHAT_WINDOWS")
+for i = 1, #CHAT_EVENTS do
+   if (IsNpcTranslationEvent(CHAT_EVENTS[i])) then addonFrame:RegisterEvent(CHAT_EVENTS[i]) end
+end
 
-addonFrame:SetScript("OnEvent", function(self, event, arg1)
+addonFrame:SetScript("OnEvent", function(self, event, arg1, arg2)
    if (event == "ADDON_LOADED") then
       if (arg1 == ADDON_NAME) then
          EnsureDB() 
@@ -1596,6 +1668,15 @@ addonFrame:SetScript("OnEvent", function(self, event, arg1)
          
          if (not waitForElvUI and not waitForPrat and not waitForChatter and not waitForDragonUI and not waitForLeatrix and not waitForWIM and not waitForBCM) then
             self:UnregisterEvent("ADDON_LOADED")
+         end
+      end
+   elseif (IsNpcTranslationEvent(event)) then
+      if (IsEnabled()) then
+         local logicalText, hashCandidates = ResolveBubbleTranslation(arg1, arg2)
+         if (logicalText and logicalText ~= "") then
+            RememberBubbleTranslation(arg1, logicalText)
+         else
+            RememberMissingBubbleHashes(hashCandidates)
          end
       end
    elseif (event == "PLAYER_LOGIN") then
