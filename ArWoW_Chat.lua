@@ -1334,6 +1334,11 @@ local function RefreshEditBox(editBox)
    UpdateEditBoxLayout(editBox, logicalText)
 end
 
+local function ResetEditBoxState(editBox)
+   chatEditTexts[editBox] = nil
+   UpdateEditBoxLayout(editBox, nil)
+end
+
 local function InstallEditHooks(editBox)
    if (not editBox or not editBox.HookScript or chatEditHooks[editBox]) then return end
    
@@ -1366,19 +1371,14 @@ local function InstallEditHooks(editBox)
    editBox:HookScript("OnEditFocusGained", function(self) 
       UpdateEditBoxLayout(self, chatEditTexts[self]) 
    end)
-   
-   local oldOnEnter = editBox:GetScript("OnEnterPressed")
-   if (oldOnEnter) then
-      editBox:SetScript("OnEnterPressed", function(self)
-         if (IsEnabled() and chatEditTexts[self]) then
-            chatNormalizeLocks[self] = true
-            self:SetText(chatEditTexts[self])
-            chatNormalizeLocks[self] = nil
-         end
-         oldOnEnter(self)
-         chatEditTexts[self] = nil
-      end)
-   end
+
+   editBox:HookScript("OnEditFocusLost", function(self)
+      ResetEditBoxState(self)
+   end)
+
+   editBox:HookScript("OnHide", function(self)
+      ResetEditBoxState(self)
+   end)
    
    chatEditHooks[editBox] = true
 end
@@ -1427,8 +1427,7 @@ local function RestoreFontToEditBox(editBox)
       editBox:SetFont(fontData.font, fontData.size, fontData.flags) 
    end
    
-   chatEditTexts[editBox] = nil 
-   UpdateEditBoxLayout(editBox, nil)
+   ResetEditBoxState(editBox)
 end
 
 local function ApplyFonts()
