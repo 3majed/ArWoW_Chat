@@ -4,6 +4,7 @@
 ![Chat 1](https://cdn.discordapp.com/attachments/956515329608151121/1500637904957997096/Screenshot_2026-05-04_020409.png?ex=69f92975&is=69f7d7f5&hm=753a4fac187ffb8dae02b59f65a22aa5eeb684014a0b1a2b80385bf9a8f551fa&)
 ![Chat 2](https://cdn.discordapp.com/attachments/956515329608151121/1500651209281900615/Screenshot_2026-05-04_020356.png?ex=69f935d9&is=69f7e459&hm=1dbdd8dc3eda1a6b3be7176ba6228ad189539f203dc6a7ccea4a9c83534c5705&)
 ![Chat 3](https://cdn.discordapp.com/attachments/956515329608151121/1500637905570365561/Screenshot_2026-05-04_020525.png?ex=69f92975&is=69f7d7f5&hm=06a397c009b27ac74a349609f0e4fec507d615740e8b4a1cfa530d1a10ce4706&)
+![NPC Chat](https://cdn.discordapp.com/attachments/956515329608151121/1507112914312761384/Screenshot_2026-05-21_135836.png?ex=6a10b7c7&is=6a0f6647&hm=c3873a9f5043146c106e6c3ff25661d2a3dc32172c434d3898513361cc60e019&)
 
 <div dir="rtl" align="right">
 ArWoW Chat هو أدون (Addon) للعبة World of Warcraft (نسخة 3.3.5a) يضبط لك الشات ويدعم الكتابة بالعربي بدون مشاكل. الأدون يشبك الحروف ويرتبها صح من اليمين لليسار عشان تطلع لك واضحة وممتازة كأنها رسمية.
@@ -15,6 +16,7 @@ ArWoW Chat is a World of Warcraft (3.3.5a) addon designed to seamlessly enable A
 
 ## أهم المميزات
 - **دعم الكتابة وربط الحروف (RTL):** يضبط لك النص تلقائياً داخل نوافذ الشات، فقاعات الكلام فوق الشخصيات (Chat Bubbles)، ومربع الكتابة.
+- **يدعم شات الـ NPCs وفقاعاتهم:** يعرض كلام الشخصيات غير القابلة للعب داخل الشات وفقاعات الكلام فوقهم بشكل عربي مرتب وواضح.
 - **ما يحوس اللغات الثانية:** الأدون يتجاهل النصوص الأجنبية عشان يضمن إن اللغات الثانية مثل الإسبانية والفرنسية والتشيكية تطلع بشكلها الصحيح وتشتغل تمام.
 - **متوافق مع إضافات ثانية (Addons):** يشتغل معاك مثل الحلاوة ومندمج جاهز مع أشهر إضافات الواجهة والشات، مثل:
   - ElvUI
@@ -35,6 +37,7 @@ ArWoW Chat is a World of Warcraft (3.3.5a) addon designed to seamlessly enable A
 
 ## Features
 - **Native Arabic Shaping & RTL:** Automatically shapes text in chat frames, chat bubbles, and the chat edit input box.
+- **NPC Chat & Bubble Support:** Properly shapes NPC dialogue shown in chat and the overhead speech bubble text above NPCs.
 - **European Language Friendly:** Skips shaping non-Arabic text to prevent mangling of other languages (e.g., Spanish, French, Czech).
 - **Extensive Addon Compatibility:** Natively integrates with custom UI and chat addons out of the box, including:
   - ElvUI

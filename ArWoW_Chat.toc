@@ -1,7 +1,7 @@
 ## Interface: 30300
 ## Title: ArWoW_Chat
 ## Notes: Enables Arabic text support in chat.
-## Version: 1.0
+## Version: 1.1
 ## Author: Majed
 ## DefaultState: Enabled
 ## LoadOnDemand: 0
