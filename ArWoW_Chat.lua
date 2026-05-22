@@ -5,11 +5,12 @@ local ADDON_NAME, ns = ...
 -- ============================================================================
 local CHAT_FONT = "Interface\\AddOns\\ArWoW_Chat\\Fonts\\Prototype_Arabic_Final.ttf"
 local chatFrameFonts, chatEditFonts, chatEditHooks, chatEditTexts = {}, {}, {}, {}
+local raidNoticeFonts = {}
 local chatPreviewFrames, chatPreviewTexts, chatPreviewCursors, chatNormalizeLocks = {}, {}, {}, {}
 local bubbleProcessorFrame = CreateFrame("Frame")
 local recentBubbleTranslations = {}
 local presentationToBaseMap
-local filtersRegistered, fontHookInstalled, headerHookInstalled = false, false, false
+local filtersRegistered, fontHookInstalled, headerHookInstalled, raidNoticeHookInstalled = false, false, false, false
 
 -- Wrapping Constraints
 local WRAP_CHARACTER_LIMIT = 60
@@ -1430,6 +1431,101 @@ local function RestoreFontToEditBox(editBox)
    ResetEditBoxState(editBox)
 end
 
+local function ApplyFontToRaidNoticeSlot(slotFrame)
+   if (not slotFrame or not slotFrame.GetFont or not slotFrame.SetFont) then return end
+
+   if (not raidNoticeFonts[slotFrame]) then
+      local font, size, flags = slotFrame:GetFont()
+      raidNoticeFonts[slotFrame] = { font = font, size = size, flags = flags }
+   end
+
+   local _, size, flags = slotFrame:GetFont()
+   slotFrame:SetFont(CHAT_FONT, size or 20, flags or "")
+end
+
+local function RestoreFontToRaidNoticeSlot(slotFrame)
+   local fontData = raidNoticeFonts[slotFrame]
+   if (fontData and fontData.font and fontData.size) then
+      slotFrame:SetFont(fontData.font, fontData.size, fontData.flags)
+   end
+end
+
+local function ApplyRaidNoticeFonts()
+   for _, slotName in ipairs({ "RaidWarningFrameSlot1", "RaidWarningFrameSlot2", "RaidBossEmoteFrameSlot1", "RaidBossEmoteFrameSlot2" }) do
+      local slotFrame = _G[slotName]
+      if (slotFrame) then ApplyFontToRaidNoticeSlot(slotFrame) end
+   end
+end
+
+local function RestoreRaidNoticeFonts()
+   for slotFrame in pairs(raidNoticeFonts) do
+      RestoreFontToRaidNoticeSlot(slotFrame)
+   end
+end
+
+local function GetRaidNoticeWrapWidth(slotFrame)
+   if (slotFrame and slotFrame.GetWidth) then
+      local width = tonumber(slotFrame:GetWidth())
+      if (width and width > 32) then return width end
+   end
+
+   local parent = slotFrame and slotFrame.GetParent and slotFrame:GetParent() or nil
+   if (parent and parent.GetWidth) then
+      local width = tonumber(parent:GetWidth())
+      if (width and width > 32) then return width end
+   end
+
+   return 800
+end
+
+local function ShapeRaidNoticeText(slotFrame, text)
+   if (not text or text == "") then return text or "" end
+
+   local logicalText = NormalizeArabicText(text)
+   if (not logicalText or logicalText == "" or not AS_ContainsArabic or not AS_ContainsArabic(logicalText)) then
+      return text
+   end
+
+   local noticeLines, wrapWidth = {}, GetRaidNoticeWrapWidth(slotFrame)
+   for logicalLine in string.gmatch((logicalText or "") .. "\n", "(.-)\n") do
+      local visualText = ShapeArabicText(logicalLine)
+      local lines = SplitVisualTextByWidth(slotFrame, wrapWidth, visualText)
+      for i = 1, #lines do noticeLines[#noticeLines + 1] = lines[i] end
+   end
+
+   if (#noticeLines == 0) then return "" end
+
+   local noticeText = table.concat(noticeLines, "\n")
+   noticeText = string.gsub(noticeText, " \n", "\n")
+   noticeText = string.gsub(noticeText, "\n ", "\n")
+
+   return noticeText
+end
+
+local function RefreshRaidNoticeFrame(noticeFrame)
+   if (not noticeFrame) then return end
+
+   for _, slotInfo in ipairs({
+      { slot = noticeFrame.slot1, text = noticeFrame.slot1_text },
+      { slot = noticeFrame.slot2, text = noticeFrame.slot2_text },
+   }) do
+      local slotFrame = slotInfo.slot
+      if (slotFrame) then
+         ApplyFontToRaidNoticeSlot(slotFrame)
+
+         local sourceText = slotInfo.text
+         if ((not sourceText or sourceText == "") and slotFrame.GetText) then
+            sourceText = slotFrame:GetText()
+         end
+
+         local shapedText = ShapeRaidNoticeText(slotFrame, sourceText)
+         if (shapedText and shapedText ~= "" and slotFrame.GetText and slotFrame:GetText() ~= shapedText) then
+            slotFrame:SetText(shapedText)
+         end
+      end
+   end
+end
+
 local function ApplyFonts()
    for index = 1, (NUM_CHAT_WINDOWS or 0) do
       local chatFrame = _G["ChatFrame" .. tostring(index)] 
@@ -1460,6 +1556,8 @@ local function ApplyFonts()
       local _, size, flags = _G.PratCCText:GetFont()
       _G.PratCCText:SetFont(CHAT_FONT, size or 14, flags or "")
    end
+
+   ApplyRaidNoticeFonts()
 end
 
 local function RestoreFonts()
@@ -1474,6 +1572,8 @@ local function RestoreFonts()
    if (CopyChatFrameEditBox and CopyChatFrameEditBox.ArWoW_FontData) then
       CopyChatFrameEditBox:SetFont(CopyChatFrameEditBox.ArWoW_FontData.font, CopyChatFrameEditBox.ArWoW_FontData.size, CopyChatFrameEditBox.ArWoW_FontData.flags)
    end
+
+   RestoreRaidNoticeFonts()
 end
 
 local function ArabicChatFilter(self, event, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12)
@@ -1535,6 +1635,17 @@ local function InstallHeaderHook()
    headerHookInstalled = true
 end
 
+local function InstallRaidNoticeHook()
+   if (raidNoticeHookInstalled) then return end
+
+   hooksecurefunc("RaidNotice_AddMessage", function(noticeFrame)
+      if (not IsEnabled()) then return end
+      RefreshRaidNoticeFrame(noticeFrame)
+   end)
+
+   raidNoticeHookInstalled = true
+end
+
 -- Export to the namespace for compat files
 ns.IsEnabled = IsEnabled
 ns.ApplyFonts = ApplyFonts
@@ -1554,6 +1665,7 @@ ns.GetLogicalEditText = function(editBox) return chatEditTexts[editBox] end
 local function ApplySupport()
    InstallFontHook() 
    InstallHeaderHook()
+   InstallRaidNoticeHook()
    
    if (ns.InstallCompatibilityHooks) then 
       ns.InstallCompatibilityHooks() 
