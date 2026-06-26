@@ -8,6 +8,9 @@ local dragonUIHooked = false
 local leatrixHooked = false
 local wimHooked = false
 local bcmHooked = false
+local cleanerChatHooked = false
+
+local CLEANERCHAT_UPDATE_CONFIG = "Glass/UPDATE_CONFIG"
 
 -- ============================================================================
 -- ElvUI Compatibility Support
@@ -396,6 +399,159 @@ local function InstallBasicChatModsHooks()
 end
 
 -- ============================================================================
+-- CleanerChat Compatibility Support
+-- Syncs CleanerChat's custom Glass font objects with ArWoW's Arabic font
+-- ============================================================================
+local function GetCleanerChatCore()
+   if (_G.Glass and type(_G.Glass.GetModule) == "function") then
+      return _G.Glass
+   end
+
+   local aceAddon = _G.LibStub and _G.LibStub("AceAddon-3.0", true)
+   if (aceAddon and type(aceAddon.GetAddon) == "function") then
+      local ok, glassCore = pcall(aceAddon.GetAddon, aceAddon, "Glass", true)
+      if (ok and glassCore) then
+         return glassCore
+      end
+   end
+end
+
+local function GetFontHeight(fontString)
+   if (not fontString) then return 14 end
+
+   if (fontString.GetLineHeight) then
+      local height = fontString:GetLineHeight()
+      if (height and height > 0) then return height end
+   end
+
+   if (fontString.GetStringHeight) then
+      local height = fontString:GetStringHeight()
+      if (height and height > 0) then return height end
+   end
+
+   return 14
+end
+
+local function SyncCleanerChatFontObject(fontObject)
+   if (not fontObject or not fontObject.GetFont or not fontObject.SetFont) then return end
+
+   local font, size, flags = fontObject:GetFont()
+   if (ns.IsEnabled()) then
+      if (font ~= ns.CHAT_FONT) then
+         fontObject.ArWoWOriginalFontData = { font = font, size = size, flags = flags }
+      end
+      fontObject:SetFont(ns.CHAT_FONT, size or 13, flags or "")
+   else
+      local fontData = fontObject.ArWoWOriginalFontData
+      if (fontData and fontData.font and fontData.size) then
+         fontObject:SetFont(fontData.font, fontData.size, fontData.flags)
+      end
+   end
+end
+
+local function RefreshCleanerChatMessages(uiManager)
+   if (not uiManager or not uiManager.state or not uiManager.state.frames) then return end
+
+   for _, smf in pairs(uiManager.state.frames) do
+      if (smf and smf.state and smf.state.isCombatLog == false and smf.state.messages) then
+         local contentHeight = 0
+
+         for _, message in ipairs(smf.state.messages) do
+            if (message and message.UpdateFrame) then
+               message:UpdateFrame()
+               contentHeight = contentHeight + (message:GetHeight() or 0)
+            end
+         end
+
+         if (smf.slider and smf.config) then
+            smf.slider:SetHeight((smf.config.height or 0) + (smf.config.overflowHeight or 0) + contentHeight)
+            if (smf.config.width) then
+               smf.slider:SetWidth(smf.config.width)
+            end
+         end
+
+         if (smf.UpdateScrollChildRect) then
+            smf:UpdateScrollChildRect()
+         end
+
+         if (smf.state.scrollAtBottom and smf.GetVerticalScrollRange and smf.SetVerticalScroll) then
+            smf:SetVerticalScroll(smf:GetVerticalScrollRange() + ((smf.config and smf.config.overflowHeight) or 0))
+         end
+      end
+   end
+end
+
+local function SyncCleanerChatState()
+   local glassCore = GetCleanerChatCore()
+   if (not glassCore or type(glassCore.GetModule) ~= "function") then return end
+
+   local fontsModule = glassCore:GetModule("Fonts", true)
+   if (fontsModule and fontsModule.fonts) then
+      SyncCleanerChatFontObject(fontsModule.fonts.GlassMessageFont)
+      SyncCleanerChatFontObject(fontsModule.fonts.GlassEditBoxFont)
+   end
+
+   local uiManager = glassCore:GetModule("UIManager", true)
+   if (uiManager and uiManager.editBox) then
+      ns.ApplyFontToEditBox(uiManager.editBox)
+
+      if (uiManager.editBox.header) then
+         local fontHeight = GetFontHeight(uiManager.editBox.header)
+         local yPadding = fontHeight * 0.66
+         uiManager.editBox:SetHeight(fontHeight + yPadding * 2)
+      end
+
+      if (uiManager.editBox.SetTextInsets) then
+         uiManager.editBox:SetTextInsets()
+      end
+   end
+
+   RefreshCleanerChatMessages(uiManager)
+end
+
+local function InstallCleanerChatHooks()
+   if (not IsAddOnLoaded("CleanerChat")) then
+      return false
+   end
+
+   local glassCore = GetCleanerChatCore()
+   if (not glassCore or type(glassCore.GetModule) ~= "function") then
+      return false
+   end
+
+   local fontsModule = glassCore:GetModule("Fonts", true)
+   if (fontsModule and type(fontsModule.OnEnable) == "function") then
+      hooksecurefunc(fontsModule, "OnEnable", function()
+         SyncCleanerChatState()
+      end)
+   end
+
+   if (type(glassCore.Subscribe) == "function" and not glassCore.ArWoWCleanerChatSubscribed) then
+      glassCore.ArWoWCleanerChatSubscribed = true
+      glassCore:Subscribe(CLEANERCHAT_UPDATE_CONFIG, function(key)
+         if (
+            key == "messageFont" or
+            key == "messageFontSize" or
+            key == "messageFontFlags" or
+            key == "editBoxFont" or
+            key == "editBoxFontSize" or
+            key == "editBoxFontFlags" or
+            key == "frameWidth" or
+            key == "frameHeight" or
+            key == "messageLeading" or
+            key == "messageLinePadding" or
+            key == "indentWordWrap"
+         ) then
+            SyncCleanerChatState()
+         end
+      end)
+   end
+
+   SyncCleanerChatState()
+   return true
+end
+
+-- ============================================================================
 -- Primary Compatibility Entry Point
 -- Called directly from ArWoW_Chat.lua -> ApplySupport()
 -- ============================================================================
@@ -427,5 +583,13 @@ function ns.InstallCompatibilityHooks()
    
    if (not bcmHooked) then
       bcmHooked = InstallBasicChatModsHooks()
+   end
+
+   if (not cleanerChatHooked) then
+      cleanerChatHooked = InstallCleanerChatHooks()
+   end
+
+   if (cleanerChatHooked) then
+      SyncCleanerChatState()
    end
 end

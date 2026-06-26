@@ -1158,13 +1158,22 @@ local function EnsurePreview(editBox)
    
    local previewFrame = CreateFrame("ScrollFrame", nil, editBox)
    previewFrame:EnableMouse(false)
+   if (editBox.GetFrameStrata and previewFrame.SetFrameStrata) then
+      previewFrame:SetFrameStrata(editBox:GetFrameStrata())
+   end
+   if (editBox.GetFrameLevel and previewFrame.SetFrameLevel) then
+      previewFrame:SetFrameLevel((editBox:GetFrameLevel() or 0) + 20)
+   end
    
    local scrollChild = CreateFrame("Frame", nil, previewFrame)
    scrollChild:SetSize(1, 1)
    scrollChild:EnableMouse(false)
+   if (previewFrame.GetFrameLevel and scrollChild.SetFrameLevel) then
+      scrollChild:SetFrameLevel(previewFrame:GetFrameLevel())
+   end
    previewFrame:SetScrollChild(scrollChild)
    
-   local previewText = scrollChild:CreateFontString(nil, "ARTWORK")
+   local previewText = scrollChild:CreateFontString(nil, "OVERLAY")
    previewText:SetJustifyH("RIGHT")
    previewText:SetJustifyV("MIDDLE")
    if (previewText.SetWordWrap) then previewText:SetWordWrap(false) end
@@ -1173,6 +1182,9 @@ local function EnsurePreview(editBox)
    local cursorFrame = CreateFrame("Frame", nil, scrollChild)
    cursorFrame:SetWidth(2)
    cursorFrame:SetHeight(14)
+   if (previewFrame.GetFrameLevel and cursorFrame.SetFrameLevel) then
+      cursorFrame:SetFrameLevel(previewFrame:GetFrameLevel() + 1)
+   end
    
    local cursorTex = cursorFrame:CreateTexture(nil, "OVERLAY")
    cursorTex:SetAllPoints()
@@ -1268,6 +1280,13 @@ local function UpdateEditBoxLayout(editBox, logicalText)
       previewText = EnsurePreview(editBox) 
       previewFrame = chatPreviewFrames[editBox] 
       cursorFrame = chatPreviewCursors[editBox]
+
+      if (previewFrame and editBox.GetFrameStrata and previewFrame.SetFrameStrata) then
+         previewFrame:SetFrameStrata(editBox:GetFrameStrata())
+      end
+      if (previewFrame and editBox.GetFrameLevel and previewFrame.SetFrameLevel) then
+         previewFrame:SetFrameLevel((editBox:GetFrameLevel() or 0) + 20)
+      end
         
       local headerObj = editBox.header or (editBox.GetName and editBox:GetName() and _G[editBox:GetName() .. "Header"])
       local headerWidth = (headerObj and headerObj.IsShown and headerObj:IsShown() and headerObj.GetWidth and headerObj:GetWidth()) or 0
