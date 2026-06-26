@@ -1705,6 +1705,29 @@ local function ClearSavedVariables()
    PrintStatus("Cleared " .. tostring(clearedCount) .. " saved untranslated NPC chat hashes.")
 end
 
+local function PrintArWoWSlashUsage()
+   if (DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.AddMessage) then
+      DEFAULT_CHAT_FRAME:AddMessage("|cffffff00ArWoW:|r Usage: /ar quest clear or /ar chat clear")
+   end
+end
+
+local function RegisterArWoWSlashHandler(commandName, commandHandler)
+   if (type(ArWoW_SlashHandlers) ~= "table") then
+      ArWoW_SlashHandlers = {}
+   end
+   ArWoW_SlashHandlers[commandName] = commandHandler
+   SlashCmdList.ARWOW = function(msg)
+      local text = string.lower(string.match(msg or "", "^%s*(.-)%s*$") or "")
+      local command, commandText = string.match(text, "^(%S+)%s*(.-)$")
+      if (command and ArWoW_SlashHandlers and ArWoW_SlashHandlers[command]) then
+         ArWoW_SlashHandlers[command](commandText or "")
+         return
+      end
+      PrintArWoWSlashUsage()
+   end
+   SLASH_ARWOW1 = "/ar"
+end
+
 local function SlashCommand(msg)
    msg = string.lower(string.gsub(msg or "", "^%s*(.-)%s*$", "%1"))
    if (msg == "" or msg == "toggle") then 
@@ -1717,28 +1740,14 @@ local function SlashCommand(msg)
       ClearSavedVariables()
       return
    elseif (msg ~= "status") then 
-      PrintStatus("Usage: /archat on|off|toggle|status|clear") 
+      PrintStatus("Usage: /ar chat on|off|toggle|status|clear") 
       return 
    end
    
    PrintStatus(IsEnabled() and "Arabic chat is enabled." or "Arabic chat is disabled.")
 end
 
-local function QtrSlashCommand(msg)
-   msg = string.lower(string.gsub(msg or "", "^%s*(.-)%s*$", "%1"))
-   if (msg == "chat clear") then
-      ClearSavedVariables()
-      return
-   end
-
-   PrintStatus("Usage: /qtr chat clear")
-end
-
-SlashCmdList.ARWOW_CHAT = SlashCommand
-SLASH_ARWOW_CHAT1 = "/archat"
-SLASH_ARWOW_CHAT2 = "/arwowchat"
-SlashCmdList.ARWOW_QTR = QtrSlashCommand
-SLASH_ARWOW_QTR1 = "/qtr"
+RegisterArWoWSlashHandler("chat", SlashCommand)
 
 local addonFrame = CreateFrame("Frame", "ArWoW_ChatFrame")
 addonFrame:RegisterEvent("ADDON_LOADED")
