@@ -39,6 +39,7 @@ ArWoW Chat is a World of Warcraft (3.3.5a) addon designed to seamlessly enable A
 ## Features
 - **Native Arabic Shaping & RTL:** Automatically shapes text in chat frames, chat bubbles, and the chat edit input box.
 - **NPC Chat & Bubble Support:** Properly shapes NPC dialogue shown in chat and the overhead speech bubble text above NPCs.
+- **Interface toggle for NPC translation:** You can disable NPC dialogue and bubble translation from the Interface Options panel to skip those lookups and stop saving untranslated NPC hashes.
 - **European Language Friendly:** Skips shaping non-Arabic text to prevent mangling of other languages (e.g., Spanish, French, Czech).
 - **Cache clear command:** Use `/ar chat clear` to clear saved untranslated NPC chat hashes, then `/reload` to persist the cleanup.
 - **Extensive Addon Compatibility:** Natively integrates with custom UI and chat addons out of the box, including:

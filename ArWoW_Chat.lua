@@ -10,6 +10,8 @@ local chatPreviewFrames, chatPreviewTexts, chatPreviewCursors, chatNormalizeLock
 local bubbleProcessorFrame = CreateFrame("Frame")
 local recentBubbleTranslations = {}
 local presentationToBaseMap
+local optionsPanel, optionsEnabledCheckbox, optionsNpcTranslationCheckbox, addonFrame
+local RefreshOptionsPanel, RefreshNpcTranslationEventRegistration
 local filtersRegistered, fontHookInstalled, headerHookInstalled, raidNoticeHookInstalled = false, false, false, false
 
 -- Wrapping Constraints
@@ -72,12 +74,17 @@ local ARABIC_MOJIBAKE_MAP = {
 local function EnsureDB() 
    if (type(ArWoWChatDB) ~= "table") then ArWoWChatDB = {} end 
    if (ArWoWChatDB.enabled ~= "0") then ArWoWChatDB.enabled = "1" end 
+   if (ArWoWChatDB.npcTranslationEnabled ~= "0") then ArWoWChatDB.npcTranslationEnabled = "1" end
    if (type(ArWoWChatDB.untranslatedBubbleHashes) ~= "table") then ArWoWChatDB.untranslatedBubbleHashes = {} end
    return ArWoWChatDB 
 end
 
 local function IsEnabled() 
    return (EnsureDB().enabled == "1") 
+end
+
+local function IsNpcTranslationEnabled()
+   return (EnsureDB().npcTranslationEnabled == "1")
 end
 
 local function PrintStatus(message) 
@@ -725,7 +732,7 @@ local function BuildBubbleHashCandidates(sourceText, speakerName)
 end
 
 local function RememberMissingBubbleHashes(hashCandidates)
-   if (not hashCandidates or #hashCandidates == 0) then return end
+   if (not IsNpcTranslationEnabled() or not hashCandidates or #hashCandidates == 0) then return end
 
    local store = EnsureDB().untranslatedBubbleHashes
    for i = 1, #hashCandidates do
@@ -756,6 +763,8 @@ local function ExpandBubbleTranslationText(text, context)
 end
 
 local function ResolveBubbleTranslation(sourceText, speakerName)
+   if (not IsNpcTranslationEnabled()) then return nil, nil, nil end
+
    local hashCandidates, normalizedText, context = BuildBubbleHashCandidates(sourceText, speakerName)
    if (not hashCandidates or #hashCandidates == 0) then return nil, nil, normalizedText end
 
@@ -777,6 +786,8 @@ local function PurgeBubbleCache(now)
 end
 
 local function RememberBubbleTranslation(sourceText, translation)
+   if (not IsNpcTranslationEnabled()) then return end
+
    local cacheKey = NormalizeBubbleTranslationKey(sourceText)
    if (cacheKey == "" or not translation or translation == "") then return end
 
@@ -786,6 +797,8 @@ local function RememberBubbleTranslation(sourceText, translation)
 end
 
 local function GetRememberedBubbleTranslation(sourceText)
+   if (not IsNpcTranslationEnabled()) then return nil end
+
    local cacheKey = NormalizeBubbleTranslationKey(sourceText)
    if (cacheKey == "") then return nil end
 
@@ -873,7 +886,7 @@ end
 
 local function BuildWrappedMessage(chatFrame, eventName, messageText, speakerName, languageName, channelName)
    local logicalText
-   if (IsNpcTranslationEvent(eventName)) then
+   if (IsNpcTranslationEvent(eventName) and IsNpcTranslationEnabled()) then
       local hashCandidates
       logicalText, hashCandidates = ResolveBubbleTranslation(messageText, speakerName)
       if (logicalText and logicalText ~= "") then
@@ -1085,9 +1098,10 @@ local function ProcessBubbleRegion(frame, region)
    end
    
    local sourceText = (currentText == region.ArWoWLastBubbleProcessedText and region.ArWoWLastBubbleSourceText) and region.ArWoWLastBubbleSourceText or currentText
-   local logicalText = GetRememberedBubbleTranslation(sourceText)
+   local npcTranslationEnabled = IsNpcTranslationEnabled()
+   local logicalText = npcTranslationEnabled and GetRememberedBubbleTranslation(sourceText) or nil
 
-   if ((not logicalText or logicalText == "") and (not AS_ContainsArabic or not AS_ContainsArabic(sourceText))) then
+   if (npcTranslationEnabled and (not logicalText or logicalText == "") and (not AS_ContainsArabic or not AS_ContainsArabic(sourceText))) then
       logicalText = ResolveBubbleTranslation(sourceText, frame and frame.Name and frame.Name.GetText and frame.Name:GetText() or nil)
       if (logicalText and logicalText ~= "") then RememberBubbleTranslation(sourceText, logicalText) end
    end
@@ -1097,6 +1111,10 @@ local function ProcessBubbleRegion(frame, region)
    end
    
    if (logicalText == "" or not AS_ContainsArabic or not AS_ContainsArabic(logicalText)) then
+      if (sourceText ~= currentText) then
+         region:SetText(sourceText)
+         region:SetJustifyH("CENTER")
+      end
       region.ArWoWLastBubbleSourceText, region.ArWoWLastBubbleProcessedText, region.ArWoWStableBubbleWidth = nil, nil, nil
       return
    end
@@ -1701,6 +1719,9 @@ local function ApplySupport()
       UnregisterFilters() 
       RestoreFonts() 
    end
+
+   if (RefreshNpcTranslationEventRegistration) then RefreshNpcTranslationEventRegistration() end
+   if (RefreshOptionsPanel) then RefreshOptionsPanel() end
 end
 
 local function SetEnabled(enabled) 
@@ -1714,14 +1735,93 @@ local function CountEntries(tableValue)
    return count
 end
 
-local function ClearSavedVariables()
+local function ClearNpcTranslationCaches(shouldPrintStatus)
    local db = EnsureDB()
    local clearedCount = CountEntries(db.untranslatedBubbleHashes)
 
    db.untranslatedBubbleHashes = {}
    for key in pairs(recentBubbleTranslations) do recentBubbleTranslations[key] = nil end
 
-   PrintStatus("Cleared " .. tostring(clearedCount) .. " saved untranslated NPC chat hashes.")
+   if (shouldPrintStatus) then
+      PrintStatus("Cleared " .. tostring(clearedCount) .. " saved untranslated NPC chat hashes.")
+   end
+
+   return clearedCount
+end
+
+local function SetNpcTranslationEnabled(enabled)
+   EnsureDB().npcTranslationEnabled = enabled and "1" or "0"
+
+   if (not enabled) then
+      ClearNpcTranslationCaches(false)
+   end
+
+   ApplySupport()
+end
+
+local function ClearSavedVariables()
+   ClearNpcTranslationCaches(true)
+end
+
+RefreshOptionsPanel = function()
+   if (optionsEnabledCheckbox and optionsEnabledCheckbox.SetChecked) then
+      optionsEnabledCheckbox:SetChecked(IsEnabled())
+   end
+
+   if (optionsNpcTranslationCheckbox and optionsNpcTranslationCheckbox.SetChecked) then
+      optionsNpcTranslationCheckbox:SetChecked(IsNpcTranslationEnabled())
+   end
+end
+
+local function CreateOptionsPanel()
+   if (optionsPanel) then
+      RefreshOptionsPanel()
+      return
+   end
+
+   local panel = CreateFrame("Frame", "ArWoWChatOptionsPanel")
+   panel.name = "ArWoW Chat"
+
+   local title = panel:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
+   title:SetPoint("TOPLEFT", 16, -16)
+   title:SetText("ArWoW Chat")
+
+   local subtitle = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+   subtitle:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -8)
+   subtitle:SetWidth(620)
+   subtitle:SetJustifyH("LEFT")
+   subtitle:SetText("Configure Arabic chat support and NPC dialogue translation.")
+
+   local enableCheckbox = CreateFrame("CheckButton", "ArWoWChatOptionsEnableCheckbox", panel, "InterfaceOptionsCheckButtonTemplate")
+   enableCheckbox:SetPoint("TOPLEFT", subtitle, "BOTTOMLEFT", -2, -16)
+   _G[enableCheckbox:GetName() .. "Text"]:SetText("Enable ArWoW Chat")
+   enableCheckbox:SetScript("OnClick", function(self)
+      SetEnabled(self:GetChecked() and true or false)
+   end)
+
+   local npcCheckbox = CreateFrame("CheckButton", "ArWoWChatOptionsNpcTranslationCheckbox", panel, "InterfaceOptionsCheckButtonTemplate")
+   npcCheckbox:SetPoint("TOPLEFT", enableCheckbox, "BOTTOMLEFT", 0, -8)
+   _G[npcCheckbox:GetName() .. "Text"]:SetText("Translate NPC dialogue and bubbles")
+   npcCheckbox:SetScript("OnClick", function(self)
+      SetNpcTranslationEnabled(self:GetChecked() and true or false)
+   end)
+
+   local description = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+   description:SetPoint("TOPLEFT", npcCheckbox, "BOTTOMLEFT", 0, -8)
+   description:SetWidth(620)
+   description:SetJustifyH("LEFT")
+   description:SetText("Disabling NPC dialogue translation skips NPC chat and overhead bubble lookups, stops storing missing untranslated NPC hashes, and clears the current NPC translation cache.")
+
+   panel:SetScript("OnShow", function()
+      RefreshOptionsPanel()
+   end)
+
+   InterfaceOptions_AddCategory(panel)
+
+   optionsPanel = panel
+   optionsEnabledCheckbox = enableCheckbox
+   optionsNpcTranslationCheckbox = npcCheckbox
+   RefreshOptionsPanel()
 end
 
 local function PrintArWoWSlashUsage()
@@ -1768,19 +1868,32 @@ end
 
 RegisterArWoWSlashHandler("chat", SlashCommand)
 
-local addonFrame = CreateFrame("Frame", "ArWoW_ChatFrame")
+addonFrame = CreateFrame("Frame", "ArWoW_ChatFrame")
 addonFrame:RegisterEvent("ADDON_LOADED")
 addonFrame:RegisterEvent("PLAYER_LOGIN")
 addonFrame:RegisterEvent("UPDATE_CHAT_WINDOWS")
-for i = 1, #CHAT_EVENTS do
-   if (IsNpcTranslationEvent(CHAT_EVENTS[i])) then addonFrame:RegisterEvent(CHAT_EVENTS[i]) end
+
+RefreshNpcTranslationEventRegistration = function()
+   if (not addonFrame) then return end
+
+   local shouldRegister = IsEnabled() and IsNpcTranslationEnabled()
+   for i = 1, #CHAT_EVENTS do
+      if (IsNpcTranslationEvent(CHAT_EVENTS[i])) then
+         if (shouldRegister) then
+            addonFrame:RegisterEvent(CHAT_EVENTS[i])
+         else
+            addonFrame:UnregisterEvent(CHAT_EVENTS[i])
+         end
+      end
+   end
 end
 
 addonFrame:SetScript("OnEvent", function(self, event, arg1, arg2)
    if (event == "ADDON_LOADED") then
       if (arg1 == ADDON_NAME) then
          EnsureDB() 
-         if (not HasBubbleTranslationTable()) then PrintStatus("NPC bubble translation table did not load.") end
+         RefreshNpcTranslationEventRegistration()
+         if (IsNpcTranslationEnabled() and not HasBubbleTranslationTable()) then PrintStatus("NPC bubble translation table did not load.") end
          
          -- Unregister early if no external addons we care about are loading
          local waitForElvUI = (GetAddOnInfo and GetAddOnInfo("ElvUI")) and not (IsAddOnLoaded and IsAddOnLoaded("ElvUI"))
@@ -1810,7 +1923,7 @@ addonFrame:SetScript("OnEvent", function(self, event, arg1, arg2)
          end
       end
    elseif (IsNpcTranslationEvent(event)) then
-      if (IsEnabled()) then
+      if (IsEnabled() and IsNpcTranslationEnabled()) then
          local logicalText, hashCandidates = ResolveBubbleTranslation(arg1, arg2)
          if (logicalText and logicalText ~= "") then
             RememberBubbleTranslation(arg1, logicalText)
@@ -1819,6 +1932,7 @@ addonFrame:SetScript("OnEvent", function(self, event, arg1, arg2)
          end
       end
    elseif (event == "PLAYER_LOGIN") then
+      CreateOptionsPanel()
       ApplySupport()
    elseif (event == "UPDATE_CHAT_WINDOWS") then
       ApplySupport()

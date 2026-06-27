@@ -256,6 +256,23 @@ local function InstallLeatrixHooks()
    
    local LeaPlusLC = _G.LeaPlusLC
    local didHook = false
+
+   local function ApplyLeatrixCopyBoxStyle(editBox)
+      if (not editBox) then return end
+
+      local currentFont, size, flags = editBox:GetFont()
+      if (currentFont ~= ns.CHAT_FONT) then
+         editBox:SetFont(ns.CHAT_FONT, size or 13, flags or "")
+      end
+
+      local scrollFrame = LeaPlusLC and LeaPlusLC.RecentChatScroll
+      local scrollWidth = scrollFrame and scrollFrame.GetWidth and scrollFrame:GetWidth()
+      if (scrollWidth and scrollWidth > 0 and editBox.ArWoWLeatrixWidth ~= scrollWidth) then
+         -- Keep Leatrix's native wrap width so long lines stay visible and inline colors render normally.
+         editBox:SetWidth(scrollWidth)
+         editBox.ArWoWLeatrixWidth = scrollWidth
+      end
+   end
    
    -- Leatrix dynamically triggers a script that creates the copy frame EditBox when the chat Double Click/Menu activates.
    -- It assigns the resulting active EditBox pointer to LeaPlusLC.RecentChatEdit
@@ -264,17 +281,14 @@ local function InstallLeatrixHooks()
          if (not ns.IsEnabled()) then return end
          
          local editBox = LeaPlusLC.RecentChatEdit
-         if (editBox and not editBox.ArWoWHooked) then
-            local _, size, flags = editBox:GetFont()
-            editBox:SetFont(ns.CHAT_FONT, size or 13, flags or "")
-            -- Disable bounding limit wrap
-            editBox:SetWidth(4000)
+         if (editBox) then
+            ApplyLeatrixCopyBoxStyle(editBox)
+
+            if (editBox.ArWoWHooked) then return end
             
             editBox:HookScript("OnShow", function(self)
                if (not ns.IsEnabled()) then return end
-               local _, csize, cflags = self:GetFont()
-               self:SetFont(ns.CHAT_FONT, csize or 13, cflags or "")
-               self:SetWidth(4000)
+               ApplyLeatrixCopyBoxStyle(self)
             end)
             
             editBox.ArWoWHooked = true
