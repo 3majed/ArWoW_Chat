@@ -1773,6 +1773,21 @@ RefreshOptionsPanel = function()
    end
 end
 
+-- Right-anchored RTL layout constants (mirrors ArWoW_Quests' options panel).
+local OPT_TEXT_WIDTH = 360
+local OPT_HEADER_WIDTH = 500
+local OPT_TEXT_RIGHT = -40
+local OPT_CHECK_RIGHT = OPT_TEXT_RIGHT + 12
+
+local function ShapeOptionsText(text, wrapWidth, fontSize)
+   if (wrapWidth and wrapWidth > 0 and AS_ReverseAndPrepareLineText) then
+      return AS_ReverseAndPrepareLineText(text, wrapWidth, CHAT_FONT, fontSize or 13)
+   elseif (ShapeArabicText) then
+      return ShapeArabicText(text)
+   end
+   return text
+end
+
 local function CreateOptionsPanel()
    if (optionsPanel) then
       RefreshOptionsPanel()
@@ -1782,35 +1797,60 @@ local function CreateOptionsPanel()
    local panel = CreateFrame("Frame", "ArWoWChatOptionsPanel")
    panel.name = "ArWoW Chat"
 
+   -- Place a right-anchored, RTL-justified body font string below relativeTo.
+   local function SetBodyText(fontString, text, relativeTo, relativeIsCheck, yOffset, fontSize)
+      fontString:SetFont(CHAT_FONT, fontSize or 13, "")
+      fontString:SetJustifyH("RIGHT")
+      fontString:SetJustifyV("TOP")
+      fontString:ClearAllPoints()
+      fontString:SetWidth(OPT_TEXT_WIDTH)
+      if (relativeIsCheck) then
+         fontString:SetPoint("TOPRIGHT", relativeTo, "BOTTOMRIGHT", OPT_TEXT_RIGHT - OPT_CHECK_RIGHT, yOffset)
+      else
+         fontString:SetPoint("TOPRIGHT", relativeTo, "BOTTOMRIGHT", 0, yOffset)
+      end
+      fontString:SetText(ShapeOptionsText(text, OPT_TEXT_WIDTH - 12, fontSize or 13))
+   end
+
+   -- Anchor a checkbox on the right edge and put its reshaped label to its left.
+   local function SetCheckbox(checkButton, textRegion, text, relativeTo, relativeIsCheck, yOffset)
+      checkButton:ClearAllPoints()
+      if (relativeIsCheck) then
+         checkButton:SetPoint("TOPRIGHT", relativeTo, "BOTTOMRIGHT", 0, yOffset)
+      else
+         checkButton:SetPoint("TOPRIGHT", relativeTo, "BOTTOMRIGHT", OPT_CHECK_RIGHT - OPT_TEXT_RIGHT, yOffset)
+      end
+      textRegion:SetFont(CHAT_FONT, 13, "")
+      textRegion:ClearAllPoints()
+      textRegion:SetPoint("RIGHT", checkButton, "LEFT", -8, 0)
+      textRegion:SetWidth(OPT_TEXT_WIDTH)
+      textRegion:SetJustifyH("RIGHT")
+      textRegion:SetText(ShapeOptionsText(text, nil, 13))
+   end
+
    local title = panel:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
-   title:SetPoint("TOPLEFT", 16, -16)
+   title:SetJustifyH("RIGHT")
+   title:SetWidth(OPT_HEADER_WIDTH)
+   title:SetPoint("TOPRIGHT", panel, "TOPRIGHT", OPT_TEXT_RIGHT, -16)
    title:SetText("ArWoW Chat")
 
    local subtitle = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-   subtitle:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -8)
-   subtitle:SetWidth(620)
-   subtitle:SetJustifyH("LEFT")
-   subtitle:SetText("Configure Arabic chat support and NPC dialogue translation.")
+   SetBodyText(subtitle, "إعدادات دعم الدردشة العربية وترجمة حوارات الشخصيات.", title, false, -18)
 
    local enableCheckbox = CreateFrame("CheckButton", "ArWoWChatOptionsEnableCheckbox", panel, "InterfaceOptionsCheckButtonTemplate")
-   enableCheckbox:SetPoint("TOPLEFT", subtitle, "BOTTOMLEFT", -2, -16)
-   _G[enableCheckbox:GetName() .. "Text"]:SetText("Enable ArWoW Chat")
+   SetCheckbox(enableCheckbox, _G[enableCheckbox:GetName() .. "Text"], "تفعيل دردشة ArWoW", subtitle, false, -10)
    enableCheckbox:SetScript("OnClick", function(self)
       SetEnabled(self:GetChecked() and true or false)
    end)
 
    local npcCheckbox = CreateFrame("CheckButton", "ArWoWChatOptionsNpcTranslationCheckbox", panel, "InterfaceOptionsCheckButtonTemplate")
-   npcCheckbox:SetPoint("TOPLEFT", enableCheckbox, "BOTTOMLEFT", 0, -8)
-   _G[npcCheckbox:GetName() .. "Text"]:SetText("Translate NPC dialogue and bubbles")
+   SetCheckbox(npcCheckbox, _G[npcCheckbox:GetName() .. "Text"], "ترجمة حوارات الشخصيات والفقاعات", enableCheckbox, true, -10)
    npcCheckbox:SetScript("OnClick", function(self)
       SetNpcTranslationEnabled(self:GetChecked() and true or false)
    end)
 
    local description = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-   description:SetPoint("TOPLEFT", npcCheckbox, "BOTTOMLEFT", 0, -8)
-   description:SetWidth(620)
-   description:SetJustifyH("LEFT")
-   description:SetText("Disabling NPC dialogue translation skips NPC chat and overhead bubble lookups, stops storing missing untranslated NPC hashes, and clears the current NPC translation cache.")
+   SetBodyText(description, "تعطيل ترجمة حوارات الشخصيات يوقف البحث في دردشة الشخصيات والفقاعات العلوية، ويوقف تخزين معرفات الشخصيات غير المترجمة، ويمسح ذاكرة ترجمة الشخصيات الحالية.", npcCheckbox, true, -12)
 
    panel:SetScript("OnShow", function()
       RefreshOptionsPanel()
