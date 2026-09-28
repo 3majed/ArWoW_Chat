@@ -9,7 +9,8 @@ local raidNoticeFonts = {}
 local chatPreviewFrames, chatPreviewTexts, chatPreviewCursors, chatNormalizeLocks = {}, {}, {}, {}
 local bubbleProcessorFrame = CreateFrame("Frame")
 local recentBubbleTranslations = {}
-local presentationToBaseMap
+local bubbleCacheGeneration = 0
+local presentationToBaseMap, presentationLeadPattern
 local optionsPanel, optionsEnabledCheckbox, optionsNpcTranslationCheckbox, addonFrame
 local RefreshOptionsPanel, RefreshNpcTranslationEventRegistration
 local filtersRegistered, fontHookInstalled, headerHookInstalled, raidNoticeHookInstalled = false, false, false, false
@@ -95,6 +96,38 @@ end
 -- ============================================================================
 -- Text Processing & Decoding
 -- ============================================================================
+-- Builds a Lua character class from the first byte of every key in a map. Text containing
+-- none of those bytes cannot match any key, so the per-character passes can be skipped.
+local function BuildLeadBytePattern(map, changedOnly)
+   local seen, leads = {}, {}
+   for key, value in pairs(map) do
+      if (type(key) == "string" and key ~= "" and (not changedOnly or key ~= value)) then
+         local lead = string.sub(key, 1, 1)
+         if (not seen[lead]) then
+            seen[lead] = true
+            leads[#leads + 1] = (string.byte(lead) < 128 and not string.find(lead, "%w")) and ("%" .. lead) or lead
+         end
+      end
+   end
+   return (#leads > 0) and ("[" .. table.concat(leads) .. "]") or nil
+end
+
+local MOJIBAKE_LEAD_PATTERN = BuildLeadBytePattern(ARABIC_MOJIBAKE_MAP)
+local arabicRules, arabicLeadPattern
+
+-- Same result as AS_ContainsArabic, but rejects text without any Arabic lead byte (most chat) up front
+local function ContainsArabic(text)
+   if (not text or text == "" or not AS_ContainsArabic) then return false end
+
+   if (arabicRules ~= AS_Reshaping_Rules) then
+      arabicRules = AS_Reshaping_Rules
+      arabicLeadPattern = (type(arabicRules) == "table") and BuildLeadBytePattern(arabicRules) or nil
+   end
+   if (arabicLeadPattern and not string.find(text, arabicLeadPattern)) then return false end
+
+   return AS_ContainsArabic(text) and true or false
+end
+
 local function NextUtf8(text, pos)
    local ok, charbytes = pcall(AS_UTF8charbytes, text, pos)
    if (not ok or not charbytes or charbytes < 1) then 
@@ -105,6 +138,7 @@ end
 
 local function DecodeArabicInput(text)
    if (not text or text == "") then return text or "" end
+   if (not MOJIBAKE_LEAD_PATTERN or not string.find(text, MOJIBAKE_LEAD_PATTERN)) then return text end
    local out, pos, bytes = {}, 1, string.len(text)
    
    while (pos <= bytes) do 
@@ -133,12 +167,14 @@ local function BuildPresentationMap()
          end
       end
    end
+   presentationLeadPattern = BuildLeadBytePattern(presentationToBaseMap, true)
 end
 
 local function UnshapeArabicText(text)
    if (not text or text == "") then return text or "" end
    BuildPresentationMap()
-   
+   if (not presentationLeadPattern or not string.find(text, presentationLeadPattern)) then return text end
+
    local out, pos, bytes = {}, 1, string.len(text)
    while (pos <= bytes) do 
       local char, charbytes, valid = NextUtf8(text, pos) 
@@ -162,8 +198,8 @@ local function NormalizeArabicInput(text)
    return UnshapeArabicText(DecodeArabicInput(text))
 end
 
-local function ReverseArabicText(text) 
-   if (text and text ~= "" and AS_ContainsArabic and AS_ContainsArabic(text)) then 
+local function ReverseArabicText(text)
+   if (ContainsArabic(text)) then
       return AS_UTF8reverseRS(text) 
    end 
    return text or "" 
@@ -210,6 +246,7 @@ local function GetProtectedMarkup(text, pos)
 end
 local function StripMarkup(text)
    local visible = text or ""
+   if (not string.find(visible, "|", 1, true)) then return visible end
    visible = string.gsub(visible, "|c%x%x%x%x%x%x%x%x", "")
    visible = string.gsub(visible, "|r", "")
    visible = string.gsub(visible, "|H.-|h(.-)|h", "%1")
@@ -262,7 +299,7 @@ local function BuildVisualToken(token)
       return token or "" 
    end
    
-   if (not AS_ContainsArabic or not AS_ContainsArabic(token) or not string.find(token, "[A-Za-z0-9]")) then 
+   if (not ContainsArabic(token) or not string.find(token, "[A-Za-z0-9]")) then
       return ReverseArabicText(token) 
    end
    
@@ -295,14 +332,14 @@ end
 
 local function IsLeftToRightToken(token)
    local visibleToken = StripMarkup(token)
-   return (visibleToken ~= "" and string.find(visibleToken, "[A-Za-z0-9]") and (not AS_ContainsArabic or not AS_ContainsArabic(visibleToken))) and true or false
+   return (visibleToken ~= "" and string.find(visibleToken, "[A-Za-z0-9]") and not ContainsArabic(visibleToken)) and true or false
 end
 
 -- Used globally to properly reconstruct bidirectional words (English mixed with Arabic)
 local function ShapeArabicText(text)
    if (not text or text == "") then return text or "" end
-   if (not AS_ContainsArabic or not AS_ContainsArabic(text)) then return text end
-   
+   if (not ContainsArabic(text)) then return text end
+
    local leadingSpaces, entries = ParseEntries(text)
    if (#entries == 0) then return ReverseArabicText(text) end
    
@@ -469,16 +506,24 @@ local function SplitVisualTextByCharacterLimit(text, firstLimit, nextLimit)
    return lines
 end
 
+-- Chat filters run once per chat frame for the same message, so keep the last wrapped result
+local lastWrapText, lastWrapFirstLimit, lastWrapNextLimit, lastWrapResult
+
 local function BuildWrappedVisualText(logicalText, firstLineLimit, nextLineLimit)
+   if (logicalText and logicalText == lastWrapText and firstLineLimit == lastWrapFirstLimit and nextLineLimit == lastWrapNextLimit) then
+      return lastWrapResult
+   end
+
    local visualText = ShapeArabicText(logicalText)
    local lines = SplitVisualTextByCharacterLimit(visualText, firstLineLimit or WRAP_CHARACTER_LIMIT, nextLineLimit or WRAP_CHARACTER_LIMIT)
-   
-   if (#lines <= 1) then return visualText end
-   
-   visualText = table.concat(lines, "\n")
-   visualText = string.gsub(visualText, " \n", "\n")
-   visualText = string.gsub(visualText, "\n ", "\n")
-   
+
+   if (#lines > 1) then
+      visualText = table.concat(lines, "\n")
+      visualText = string.gsub(visualText, " \n", "\n")
+      visualText = string.gsub(visualText, "\n ", "\n")
+   end
+
+   lastWrapText, lastWrapFirstLimit, lastWrapNextLimit, lastWrapResult = logicalText, firstLineLimit, nextLineLimit, visualText
    return visualText
 end
 
@@ -496,19 +541,6 @@ local function SetMeasureFont(owner, width)
    measureText:SetFont(fontFile or CHAT_FONT, fontSize or 13, fontFlags or "")
    
    return measureText, fontSize or 13
-end
-
-local function MeasureTextHeight(owner, width, text)
-   local measureText, fontSize = SetMeasureFont(owner, width)
-   if (not measureText) then return 0, fontSize end
-   
-   measureText:SetText(StripMarkup(text))
-   return measureText:GetHeight() or 0, fontSize
-end
-
-local function FitsOnOneLine(owner, width, text, prefix)
-   local height, fontSize = MeasureTextHeight(owner, width, (prefix or "") .. (text or ""))
-   return (height <= (fontSize or 13) * 1.5)
 end
 
 local function GetWrapSafetyWidth(chatFrame) 
@@ -793,6 +825,12 @@ local function RememberBubbleTranslation(sourceText, translation)
 
    local now = GetTime and GetTime() or 0
    PurgeBubbleCache(now)
+
+   local previous = recentBubbleTranslations[cacheKey]
+   if (not previous or previous.text ~= translation) then
+      -- Makes already-checked bubbles look again, since this translation may now apply to them
+      bubbleCacheGeneration = bubbleCacheGeneration + 1
+   end
    recentBubbleTranslations[cacheKey] = { text = translation, expiresAt = now + BUBBLE_CACHE_TTL }
 end
 
@@ -884,7 +922,16 @@ local function WrapLogicalText(chatFrame, logicalText, prefixText, wrapWidth)
    return BuildWrappedVisualText(logicalText, firstLineLimit, wrapLimit)
 end
 
-local function BuildWrappedMessage(chatFrame, eventName, messageText, speakerName, languageName, channelName)
+-- Chat filters run once per chat frame for the same message (and NPC events once more in OnEvent),
+-- so the translation lookup and normalization are done once per event. GetTime() is fixed within a frame.
+local lastMessageEvent, lastMessageText, lastMessageSpeaker, lastMessageTime, lastMessageLogical
+
+local function ResolveLogicalMessage(eventName, messageText, speakerName)
+   local now = GetTime()
+   if (now == lastMessageTime and eventName == lastMessageEvent and messageText == lastMessageText and speakerName == lastMessageSpeaker) then
+      return lastMessageLogical
+   end
+
    local logicalText
    if (IsNpcTranslationEvent(eventName) and IsNpcTranslationEnabled()) then
       local hashCandidates
@@ -898,8 +945,16 @@ local function BuildWrappedMessage(chatFrame, eventName, messageText, speakerNam
 
    if (not logicalText or logicalText == "") then
       logicalText = NormalizeArabicText(messageText)
-      if (not logicalText or logicalText == "" or not AS_ContainsArabic or not AS_ContainsArabic(logicalText)) then return nil end
+      if (not logicalText or logicalText == "" or not ContainsArabic(logicalText)) then logicalText = nil end
    end
+
+   lastMessageEvent, lastMessageText, lastMessageSpeaker, lastMessageTime, lastMessageLogical = eventName, messageText, speakerName, now, logicalText
+   return logicalText
+end
+
+local function BuildWrappedMessage(chatFrame, eventName, messageText, speakerName, languageName, channelName)
+   local logicalText = ResolveLogicalMessage(eventName, messageText, speakerName)
+   if (not logicalText) then return nil end
 
    local prefixText = BuildVisiblePrefix(chatFrame, eventName, speakerName, languageName, channelName)
    local wrapLimit = GetWrapCharacterLimit(chatFrame)
@@ -957,11 +1012,32 @@ local function ApplyBubbleFontToFrame(frame, region)
    end
 end
 
+-- WorldFrame children (nameplates, chat bubbles) are created on demand and reused, never destroyed.
+-- Classify each child once when it first appears instead of rescanning every nameplate per tick.
+local bubbleFrames, bubbleFrameSet, scannedWorldChildren = {}, {}, 0
+
+local function CollectNewBubbleFrames(...)
+   local numChildren = select("#", ...)
+   for i = scannedWorldChildren + 1, numChildren do
+      local child = select(i, ...)
+      if (child and not bubbleFrameSet[child] and GetBubbleTextRegion(child)) then
+         bubbleFrameSet[child] = true
+         bubbleFrames[#bubbleFrames + 1] = child
+      end
+   end
+   scannedWorldChildren = numChildren
+end
+
 local function IterateBubbleTextRegions(callback)
    if (not WorldFrame or not WorldFrame.GetNumChildren) then return end
-   
-   for i = 1, WorldFrame:GetNumChildren() do
-      local bubbleFrame = select(i, WorldFrame:GetChildren())
+
+   local numChildren = WorldFrame:GetNumChildren()
+   -- A child was reparented away by another addon, so indexes shifted; rescan everything once
+   if (numChildren < scannedWorldChildren) then scannedWorldChildren = 0 end
+   if (numChildren > scannedWorldChildren) then CollectNewBubbleFrames(WorldFrame:GetChildren()) end
+
+   for i = 1, #bubbleFrames do
+      local bubbleFrame = bubbleFrames[i]
       local textRegion = GetBubbleTextRegion(bubbleFrame)
       if (textRegion) then callback(bubbleFrame, textRegion) end
    end
@@ -1015,15 +1091,25 @@ local function SplitVisualTextByWidth(owner, width, text)
    if (#entries == 0) then return { text } end
    
    local lines, currentLine = {}, ""
-   
+
+   -- Set the measuring font once per call; only the text changes per candidate line
+   local measureText, fontSize = SetMeasureFont(owner, safeWidth)
+   local maxLineHeight = (fontSize or 13) * 1.5
+
+   local function FitsOnOneLine(candidateText)
+      if (not measureText) then return true end
+      measureText:SetText(StripMarkup(candidateText))
+      return ((measureText:GetHeight() or 0) <= maxLineHeight)
+   end
+
    local function PushLine(lineText)
       if (lineText ~= "" or #lines == 0) then lines[#lines + 1] = lineText end
    end
-   
+
    local index = #entries
    while (index >= 1) do
       local tokenText, separatorText
-      
+
       if (IsLeftToRightToken(entries[index].token)) then
          local startIndex = index
          while (startIndex > 1 and IsLeftToRightToken(entries[startIndex - 1].token)) do startIndex = startIndex - 1 end
@@ -1038,7 +1124,7 @@ local function SplitVisualTextByWidth(owner, width, text)
       
       local candidate = (currentLine ~= "") and (tokenText .. separatorText .. currentLine) or tokenText
       
-      if (currentLine ~= "" and not FitsOnOneLine(owner, safeWidth, candidate)) then
+      if (currentLine ~= "" and not FitsOnOneLine(candidate)) then
          PushLine(currentLine)
          currentLine = tokenText
       else
@@ -1096,12 +1182,15 @@ local function ProcessBubbleRegion(frame, region)
       region.ArWoWLastBubbleSourceText, region.ArWoWLastBubbleProcessedText, region.ArWoWStableBubbleWidth = nil, nil, nil
       return
    end
-   
+
+   -- A bubble keeps its text for several seconds; skip it until its text or the translation cache changes
+   if (currentText == region.ArWoWLastBubbleProcessedText and region.ArWoWBubbleGeneration == bubbleCacheGeneration) then return end
+
    local sourceText = (currentText == region.ArWoWLastBubbleProcessedText and region.ArWoWLastBubbleSourceText) and region.ArWoWLastBubbleSourceText or currentText
    local npcTranslationEnabled = IsNpcTranslationEnabled()
    local logicalText = npcTranslationEnabled and GetRememberedBubbleTranslation(sourceText) or nil
 
-   if (npcTranslationEnabled and (not logicalText or logicalText == "") and (not AS_ContainsArabic or not AS_ContainsArabic(sourceText))) then
+   if (npcTranslationEnabled and (not logicalText or logicalText == "") and not ContainsArabic(sourceText)) then
       logicalText = ResolveBubbleTranslation(sourceText, frame and frame.Name and frame.Name.GetText and frame.Name:GetText() or nil)
       if (logicalText and logicalText ~= "") then RememberBubbleTranslation(sourceText, logicalText) end
    end
@@ -1110,12 +1199,14 @@ local function ProcessBubbleRegion(frame, region)
       logicalText = NormalizeArabicText(BuildBubbleSourceText(sourceText))
    end
    
-   if (logicalText == "" or not AS_ContainsArabic or not AS_ContainsArabic(logicalText)) then
+   if (logicalText == "" or not ContainsArabic(logicalText)) then
       if (sourceText ~= currentText) then
          region:SetText(sourceText)
          region:SetJustifyH("CENTER")
       end
-      region.ArWoWLastBubbleSourceText, region.ArWoWLastBubbleProcessedText, region.ArWoWStableBubbleWidth = nil, nil, nil
+      -- Remember the untouched text too, so a non-Arabic bubble is not re-examined every scan
+      region.ArWoWLastBubbleSourceText, region.ArWoWLastBubbleProcessedText, region.ArWoWStableBubbleWidth = sourceText, sourceText, nil
+      region.ArWoWBubbleGeneration = bubbleCacheGeneration
       return
    end
    
@@ -1129,6 +1220,7 @@ local function ProcessBubbleRegion(frame, region)
    region:SetJustifyH(BubbleNeedsRightJustify(logicalText, bubbleText) and "RIGHT" or "CENTER")
    region.ArWoWLastBubbleSourceText = sourceText
    region.ArWoWLastBubbleProcessedText = bubbleText
+   region.ArWoWBubbleGeneration = bubbleCacheGeneration
 end
 
 local function ProcessBubbleQueue(_, elapsed)
@@ -1167,7 +1259,7 @@ local function ClearHighlight(editBox)
 end
 
 local function ShouldUsePreview(logicalText)
-   return IsEnabled() and logicalText and logicalText ~= "" and string.sub(logicalText, 1, 1) ~= "/" and AS_ContainsArabic and AS_ContainsArabic(logicalText)
+   return IsEnabled() and logicalText and logicalText ~= "" and string.sub(logicalText, 1, 1) ~= "/" and ContainsArabic(logicalText)
 end
 
 -- Builds the hidden scroll element that displays the correctly shaped/RTL text overlaying the native edit box
@@ -1519,7 +1611,7 @@ local function ShapeRaidNoticeText(slotFrame, text)
    if (not text or text == "") then return text or "" end
 
    local logicalText = NormalizeArabicText(text)
-   if (not logicalText or logicalText == "" or not AS_ContainsArabic or not AS_ContainsArabic(logicalText)) then
+   if (not logicalText or logicalText == "" or not ContainsArabic(logicalText)) then
       return text
    end
 
@@ -1700,7 +1792,11 @@ ns.GetLogicalEditText = function(editBox) return chatEditTexts[editBox] end
 -- Registration & Event Handling
 -- ============================================================================
 local function ApplySupport()
-   InstallFontHook() 
+   -- Settings may have changed, so drop cached message results and re-check visible bubbles
+   lastMessageTime = nil
+   bubbleCacheGeneration = bubbleCacheGeneration + 1
+
+   InstallFontHook()
    InstallHeaderHook()
    InstallRaidNoticeHook()
    
@@ -1741,6 +1837,7 @@ local function ClearNpcTranslationCaches(shouldPrintStatus)
 
    db.untranslatedBubbleHashes = {}
    for key in pairs(recentBubbleTranslations) do recentBubbleTranslations[key] = nil end
+   bubbleCacheGeneration = bubbleCacheGeneration + 1
 
    if (shouldPrintStatus) then
       PrintStatus("Cleared " .. tostring(clearedCount) .. " saved untranslated NPC chat hashes.")
@@ -1964,12 +2061,8 @@ addonFrame:SetScript("OnEvent", function(self, event, arg1, arg2)
       end
    elseif (IsNpcTranslationEvent(event)) then
       if (IsEnabled() and IsNpcTranslationEnabled()) then
-         local logicalText, hashCandidates = ResolveBubbleTranslation(arg1, arg2)
-         if (logicalText and logicalText ~= "") then
-            RememberBubbleTranslation(arg1, logicalText)
-         else
-            RememberMissingBubbleHashes(hashCandidates)
-         end
+         -- Usually already resolved by the chat filters this frame; otherwise this does the lookup
+         ResolveLogicalMessage(event, arg1, arg2)
       end
    elseif (event == "PLAYER_LOGIN") then
       CreateOptionsPanel()

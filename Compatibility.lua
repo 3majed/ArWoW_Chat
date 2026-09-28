@@ -255,60 +255,69 @@ local function InstallLeatrixHooks()
    end
    
    local LeaPlusLC = _G.LeaPlusLC
-   local didHook = false
+
+   local function GetRecentChatScroll()
+      return LeaPlusLC.RecentChatScroll or _G.LeaPlusRecentChatScroll
+   end
 
    local function ApplyLeatrixCopyBoxStyle(editBox)
-      if (not editBox) then return end
+      if (not editBox or not ns.IsEnabled()) then return end
 
-      local currentFont, size, flags = editBox:GetFont()
-      if (currentFont ~= ns.CHAT_FONT) then
+      -- Leatrix never changes the font of a copy box after creating it, so set it once per box.
+      -- Re-applying a font to a multiline EditBox re-lays out the entire chat history.
+      if (not editBox.ArWoWLeatrixFont) then
+         local _, size, flags = editBox:GetFont()
          editBox:SetFont(ns.CHAT_FONT, size or 13, flags or "")
+         editBox.ArWoWLeatrixFont = true
       end
 
-      local scrollFrame = LeaPlusLC and LeaPlusLC.RecentChatScroll
-      local scrollWidth = scrollFrame and scrollFrame.GetWidth and scrollFrame:GetWidth()
+      local scrollFrame = GetRecentChatScroll()
+      local scrollWidth = scrollFrame and scrollFrame:GetWidth()
       if (scrollWidth and scrollWidth > 0 and editBox.ArWoWLeatrixWidth ~= scrollWidth) then
          -- Keep Leatrix's native wrap width so long lines stay visible and inline colors render normally.
          editBox:SetWidth(scrollWidth)
          editBox.ArWoWLeatrixWidth = scrollWidth
       end
    end
-   
-   -- Leatrix dynamically triggers a script that creates the copy frame EditBox when the chat Double Click/Menu activates.
-   -- It assigns the resulting active EditBox pointer to LeaPlusLC.RecentChatEdit
-   if (LeaPlusLC) then
-      local function WrapLeatrixCopyBox()
-         if (not ns.IsEnabled()) then return end
-         
-         local editBox = LeaPlusLC.RecentChatEdit
-         if (editBox) then
-            ApplyLeatrixCopyBoxStyle(editBox)
 
-            if (editBox.ArWoWHooked) then return end
-            
-            editBox:HookScript("OnShow", function(self)
-               if (not ns.IsEnabled()) then return end
-               ApplyLeatrixCopyBoxStyle(self)
-            end)
-            
-            editBox.ArWoWHooked = true
-         end
-      end
-      
-      -- Instead of hooking an explicit function creation or trying to guess context menu timing, 
-      -- continuously scan while the Leatrix Chat Window is visibly open. This catches every 
-      -- dynamically spawned EditBox recreation instantly.
-      local leatrixScanner = CreateFrame("Frame")
-      leatrixScanner:SetScript("OnUpdate", function()
-         if (LeaPlusLC.RecentChatFrame and LeaPlusLC.RecentChatFrame:IsShown()) then
-            WrapLeatrixCopyBox()
+   local function HookRecentChatWindow()
+      local scrollFrame = GetRecentChatScroll()
+      if (not scrollFrame or scrollFrame.ArWoWHooked) then return end
+
+      -- Leatrix creates a fresh EditBox on every open and attaches it with SetScrollChild before
+      -- filling it with the chat history. Styling it here, while it is still empty, means the
+      -- history is laid out once in the Arabic font instead of twice.
+      hooksecurefunc(scrollFrame, "SetScrollChild", function(_, child)
+         if (child and child.GetObjectType and child:GetObjectType() == "EditBox") then
+            ApplyLeatrixCopyBoxStyle(child)
          end
       end)
-      
-      didHook = true
+
+      -- Catches the scroll width resolving after the first show, so the wrap width stays correct.
+      scrollFrame:HookScript("OnSizeChanged", function()
+         ApplyLeatrixCopyBoxStyle(LeaPlusLC.RecentChatEdit)
+      end)
+
+      local recentChatFrame = LeaPlusLC.RecentChatFrame or _G.LeaPlusRecentChatFrame
+      if (recentChatFrame) then
+         recentChatFrame:HookScript("OnShow", function()
+            ApplyLeatrixCopyBoxStyle(LeaPlusLC.RecentChatEdit)
+         end)
+      end
+
+      scrollFrame.ArWoWHooked = true
    end
-   
-   return didHook
+
+   -- Leatrix builds the Recent Chat window in LeaPlusLC:Player() on PLAYER_LOGIN, which may run after us.
+   if (GetRecentChatScroll()) then
+      HookRecentChatWindow()
+   elseif (type(LeaPlusLC.Player) == "function") then
+      hooksecurefunc(LeaPlusLC, "Player", HookRecentChatWindow)
+   else
+      return false
+   end
+
+   return true
 end
 
 -- ============================================================================
