@@ -656,10 +656,21 @@ end
 -------------------------------------------------------------------------------------------------------
 -- Helper function to check if a character is a word separator (space, punctuation, etc.)
 -------------------------------------------------------------------------------------------------------
+-- Checked twice for every character while shaping; a set replaces scanning this string on each call.
+local AS_WordSeparatorChars = {};
+do
+   local spaces = '( )?؟!,.;:،؛٪\n\r\t';
+   local pos = 1;
+   while pos <= strlen(spaces) do
+      local charbytes = AS_UTF8charbytes(spaces, pos);
+      AS_WordSeparatorChars[strsub(spaces, pos, pos + charbytes - 1)] = true;
+      pos = pos + charbytes;
+   end
+end
+
 local function AS_IsWordSeparator(char)
    if not char or char == '' or char == 'X' then return true end
-   local spaces = '( )?؟!,.;:،؛٪\n\r\t';
-   if AS_UTF8find(spaces, char) then return true end
+   if AS_WordSeparatorChars[char] then return true end
    -- HAMZA (ء) is a non-joining letter (doesn't connect from previous or to next).
    -- Treat it as a join-breaker so words like "شيء" shape correctly (ي should be FINAL, not MIDDLE).
    if char == "\216\161" then return true end
@@ -695,8 +706,56 @@ end
 
 -- After full RTL reversal, digit sequences become reversed (e.g. 1000 -> 0001).
 -- This function flips digit runs back while preserving WoW escape sequences (|c... and hyperlinks).
+-- Digit runs are the only thing AS_FixDigitRunsForRTL rewrites; everything else is copied through.
+-- The Arabic-Indic digits are two-byte characters sharing a lead byte, so they are searched for with one
+-- "lead byte + set of second bytes" pattern per lead byte, built from the table the first time it is seen.
+local AS_DigitPatternSource, AS_DigitPatterns;
+
+local function AS_ContainsAnyDigit(s)
+   if string.find(s, "[0-9]") then return true end
+
+   if (AS_DigitPatternSource ~= AS_ArabicIndicNumerals) then
+      AS_DigitPatternSource = AS_ArabicIndicNumerals;
+      local secondBytes, leads = {}, {};
+      AS_DigitPatterns = {};
+      for digit in pairs(AS_ArabicIndicNumerals) do
+         local lead, second;
+         if (type(digit) == "string" and #digit == 2) then
+            lead, second = strbyte(digit, 1, 2);
+         end
+         if (not lead or lead < 194 or lead > 223 or second < 128 or second > 191) then
+            AS_DigitPatterns = false; -- an unexpected key: search for every key as plain text instead
+            break;
+         end
+         if (not secondBytes[lead]) then
+            secondBytes[lead] = {};
+            leads[#leads + 1] = lead;
+         end
+         secondBytes[lead][#secondBytes[lead] + 1] = strsub(digit, 2, 2);
+      end
+      if AS_DigitPatterns then
+         for i = 1, #leads do
+            AS_DigitPatterns[i] = string.char(leads[i]) .. "[" .. table.concat(secondBytes[leads[i]]) .. "]";
+         end
+      end
+   end
+
+   if AS_DigitPatterns then
+      for i = 1, #AS_DigitPatterns do
+         if string.find(s, AS_DigitPatterns[i]) then return true end
+      end
+      return false;
+   end
+
+   for digit in pairs(AS_ArabicIndicNumerals) do
+      if string.find(s, digit, 1, true) then return true end
+   end
+   return false;
+end
+
 local function AS_FixDigitRunsForRTL(s)
    if not s or #s == 0 then return "" end
+   if not AS_ContainsAnyDigit(s) then return s end
 
    local out = {};
    local bytes = strlen(s);
@@ -805,158 +864,119 @@ end
 --   - middle: connected from left, connects to right
 --   - final: connected from left, doesn't connect to right
 -------------------------------------------------------------------------------------------------------
+-- Splits a UTF-8 string into its characters. ASCII and two-byte characters (nearly all Arabic text)
+-- are sized inline; everything else, including invalid input, goes through AS_UTF8charbytes.
+local function AS_SplitUTF8(s)
+   local chars = {};
+   local count = 0;
+   local bytes = strlen(s);
+   local pos = 1;
+   while (pos <= bytes) do
+      local c = strbyte(s, pos);
+      local charbytes;
+      if (c > 0 and c <= 127) then
+         charbytes = 1;
+      else
+         local c2 = (c >= 194 and c <= 223) and strbyte(s, pos + 1);
+         if (c2 and c2 >= 128 and c2 <= 191) then
+            charbytes = 2;
+         else
+            charbytes = AS_UTF8charbytes(s, pos);
+         end
+      end
+      count = count + 1;
+      chars[count] = strsub(s, pos, pos + charbytes - 1);
+      pos = pos + charbytes;
+   end
+   return chars, count;
+end
+
+local AS_MirroredBrackets = {
+   ["<"] = ">", [">"] = "<",
+   ["("] = ")", [")"] = "(",
+   ["["] = "]", ["]"] = "[",
+   ["{"] = "}", ["}"] = "{",
+};
+
 function AS_UTF8reverseRS(s, fixNumbers)
    if not s or #s == 0 then return "" end
    if fixNumbers == nil then fixNumbers = true end
-   
-   local resultParts = {};
-   local resultIndex = 1;
-   local bytes = strlen(s);
-   local pos = 1;
-   
-   -- Track previous character info for connection logic
-   local prevChar = nil;           -- Previous BASE character (nil = start of string or after separator)
-   local prevConnectsRight = false; -- Did the previous character connect to the right?
 
-   while (pos <= bytes) do
-      -- Get current character
-      local charbytes1 = AS_UTF8charbytes(s, pos);
-      local char1 = strsub(s, pos, pos + charbytes1 - 1);
-      
-      -- Collect any diacritics attached to this character
-      local attachedDiacritics = {};
-      local nextPos = pos + charbytes1;
-      
-      while nextPos <= bytes do
-         local diacBytes = AS_UTF8charbytes(s, nextPos);
-         local diacChar = strsub(s, nextPos, nextPos + diacBytes - 1);
-         if AS_IsDiacritic(diacChar) then
-            attachedDiacritics[#attachedDiacritics + 1] = diacChar;
-            nextPos = nextPos + diacBytes;
-         else
-            break;
-         end
+   -- The string is split once, so the look-ahead below indexes characters instead of decoding them again
+   local chars, count = AS_SplitUTF8(s);
+   local diacritics = AS_Diacritics;
+   local rules = AS_Reshaping_Rules;
+   local rules2 = AS_Reshaping_Rules2;
+   local presentationForms = AS_USE_PRESENTATION_DIACRITICS and AS_DiacriticPresentationForms;
+   local resultParts = {};
+   local resultIndex = 0;
+
+   -- Did the previous character connect to the right? (false at the start and after a separator)
+   local prevConnectsRight = false;
+   local separatorIndex, separatorValue = 0, false;
+   local index = 1;
+
+   while (index <= count) do
+      local char1 = chars[index];
+
+      -- Diacritics attached to char1 are chars[index + 1 .. index2 - 1]
+      local index2 = index + 1;
+      while (index2 <= count and diacritics[chars[index2]] == true) do
+         index2 = index2 + 1;
       end
-      
-      pos = nextPos;
+      local nextIndex = index2;
 
       -- Handle diacritics - they don't affect reshaping logic
-      if AS_IsDiacritic(char1) then
-         local diacOut = char1;
-         if AS_USE_PRESENTATION_DIACRITICS and AS_DiacriticPresentationForms and AS_DiacriticPresentationForms[char1] then
-            diacOut = AS_DiacriticPresentationForms[char1];
-         end
-         resultParts[resultIndex] = diacOut;
+      if (diacritics[char1] == true) then
          resultIndex = resultIndex + 1;
-         -- Don't update prevChar or prevConnectsRight for diacritics
+         resultParts[resultIndex] = (presentationForms and presentationForms[char1]) or char1;
       else
-         -- Find next base character (skipping diacritics)
-         local char2 = nil;
-         local charbytes2 = 0;
-         local lookPos = pos;
-         
-         while lookPos <= bytes do
-            local tempBytes = AS_UTF8charbytes(s, lookPos);
-            local tempChar = strsub(s, lookPos, lookPos + tempBytes - 1);
-            if AS_IsDiacritic(tempChar) then
-               lookPos = lookPos + tempBytes;
-            else
-               char2 = tempChar;
-               charbytes2 = tempBytes;
-               break;
-            end
-         end
-         
-         -- Check for ligatures FIRST (they affect char1 and may skip char2)
+         -- Next base character (diacritics already skipped)
+         local char2 = chars[index2];
+         local ligatureForm = char2 and rules2[char1 .. char2];
          local ligatureApplied = false;
-         local ligatureForm = nil;
-         
-         if char2 and AS_Reshaping_Rules2[char1 .. char2] then
-            ligatureForm = AS_Reshaping_Rules2[char1 .. char2];
+
+         -- Check for ligatures FIRST (they affect char1 and skip char2 and its diacritics)
+         if ligatureForm then
             ligatureApplied = true;
-            -- Skip char2 (and its diacritics)
-            pos = lookPos + charbytes2;
-            while pos <= bytes do
-               local skipBytes = AS_UTF8charbytes(s, pos);
-               local skipChar = strsub(s, pos, pos + skipBytes - 1);
-               if AS_IsDiacritic(skipChar) then
-                  pos = pos + skipBytes;
-               else
-                  break;
-               end
+            nextIndex = index2 + 1;
+            while (nextIndex <= count and diacritics[chars[nextIndex]] == true) do
+               nextIndex = nextIndex + 1;
             end
-            -- Update char2 to what comes AFTER the ligature
-            lookPos = pos;
-            char2 = nil;
-            while lookPos <= bytes do
-               local tempBytes = AS_UTF8charbytes(s, lookPos);
-               local tempChar = strsub(s, lookPos, lookPos + tempBytes - 1);
-               if AS_IsDiacritic(tempChar) then
-                  lookPos = lookPos + tempBytes;
-               else
-                  char2 = tempChar;
-                  break;
-               end
-            end
+            char2 = chars[nextIndex];
          end
-         
-         -- Determine if this character/ligature is a word separator
-         local isCurrentSeparator = AS_IsWordSeparator(char1);
+
+         -- char2 becomes the next char1, so its separator test is kept for the next round
+         local isCurrentSeparator;
+         if (separatorIndex == index) then
+            isCurrentSeparator = separatorValue;
+         else
+            isCurrentSeparator = AS_IsWordSeparator(char1);
+         end
          local isNextSeparator = AS_IsWordSeparator(char2);
+         separatorIndex, separatorValue = nextIndex, isNextSeparator;
 
          -- IMPORTANT: Any non-Arabic character must break Arabic joining.
-         -- Previously, Latin letters (doom) were treated like "letters" and could incorrectly
-         -- connect to the next Arabic letter, producing wrong forms (e.g., ح becomes medial).
-         local isCurrentArabic = ligatureApplied or (AS_Reshaping_Rules[char1] ~= nil);
-         if (not isCurrentSeparator) and (not isCurrentArabic) then
+         local charRules = rules[char1];
+         if (not isCurrentSeparator) and (not ligatureApplied) and (charRules == nil) then
             isCurrentSeparator = true;
          end
-         
+
          if isCurrentSeparator then
-            -- Word separators pass through unchanged
-            local outputChar = char1;
-            -- Handle bracket reversal for separators
-            if (char1 == "<") then outputChar = ">";
-            elseif (char1 == ">") then outputChar = "<";
-            elseif (char1 == "(") then outputChar = ")";
-            elseif (char1 == ")") then outputChar = "(";
-            elseif (char1 == "[") then outputChar = "]";
-            elseif (char1 == "]") then outputChar = "[";
-            elseif (char1 == "{") then outputChar = "}";
-            elseif (char1 == "}") then outputChar = "{";
-            end
-            
-            resultParts[resultIndex] = outputChar;
+            -- Word separators pass through unchanged, except for bracket reversal
             resultIndex = resultIndex + 1;
-            
-            -- Reset connection state
-            prevChar = nil;
+            resultParts[resultIndex] = AS_MirroredBrackets[char1] or char1;
             prevConnectsRight = false;
          else
             -- This is an Arabic letter - determine its form
-            
-            -- Step 1: Is this letter connected FROM the left?
-            -- It's connected from left if previous letter exists AND previous letter connects right
-            local connectedFromLeft = (prevChar ~= nil) and prevConnectsRight;
-            
-            -- Step 2: Does this letter connect TO the right?
-            -- It connects right if: (a) it's not a non-connecting letter, AND (b) next char is an Arabic letter
+            local connectedFromLeft = prevConnectsRight;
+
+            -- It connects right if it's not a ligature or non-connecting letter AND the next char is an Arabic letter
             local currentConnectsRight = false;
-            if ligatureApplied then
-               -- Lam-Alef ligatures are non-connecting (don't connect to next letter)
-               currentConnectsRight = false;
-            elseif AS_IsNonConnecting(char1) then
-               -- Non-connecting letters don't connect to the right
-               currentConnectsRight = false;
-            elseif not isNextSeparator and char2 and AS_Reshaping_Rules[char2] then
-               -- Next character is an Arabic letter, so we connect to it
+            if (not ligatureApplied) and (not AS_IsNonConnecting(char1)) and (not isNextSeparator) and char2 and rules[char2] then
                currentConnectsRight = true;
-            else
-               -- No next letter or next is separator
-               currentConnectsRight = false;
             end
-            
-            -- Step 3: Determine form based on connection state
+
             local position;
             if connectedFromLeft and currentConnectsRight then
                position = 2;  -- middle
@@ -967,70 +987,52 @@ function AS_UTF8reverseRS(s, fixNumbers)
             else
                position = 0;  -- isolated
             end
-            
-            -- Step 4: Apply reshaping
+
+            local forms = ligatureForm or charRules;
             local outputChar;
-            
-            if ligatureApplied and ligatureForm then
-               -- Use ligature form
+            if forms then
                if position == 0 then
-                  outputChar = ligatureForm.isolated;
+                  outputChar = forms.isolated;
                elseif position == 1 then
-                  outputChar = ligatureForm.initial;
+                  outputChar = forms.initial;
                elseif position == 2 then
-                  outputChar = ligatureForm.middle;
+                  outputChar = forms.middle;
                else
-                  outputChar = ligatureForm.final;
+                  outputChar = forms.final;
                end
             else
-               -- Use regular reshaping rules
-               local rules = AS_Reshaping_Rules[char1];
-               if rules then
-                  if position == 0 then
-                     outputChar = rules.isolated;
-                  elseif position == 1 then
-                     outputChar = rules.initial;
-                  elseif position == 2 then
-                     outputChar = rules.middle;
-                  else
-                     outputChar = rules.final;
-                  end
-               else
-                  outputChar = char1;
-               end
+               outputChar = char1;
             end
-            
+
             -- Add position prefix when reshaper debug is enabled (general VERBOSE)
             if RS_IsDebugForm() then
                outputChar = tostring(position) .. outputChar;
             end
-            
+
             -- Add attached diacritics
-            for _, diac in ipairs(attachedDiacritics) do
-               if AS_USE_PRESENTATION_DIACRITICS and AS_DiacriticPresentationForms and AS_DiacriticPresentationForms[diac] then
-                  outputChar = outputChar .. AS_DiacriticPresentationForms[diac];
-               else
-                  outputChar = outputChar .. diac;
-               end
+            for diacIndex = index + 1, index2 - 1 do
+               local diac = chars[diacIndex];
+               outputChar = outputChar .. ((presentationForms and presentationForms[diac]) or diac);
             end
-            
-            resultParts[resultIndex] = outputChar;
+
             resultIndex = resultIndex + 1;
-            
-            -- Update state for next iteration
-            prevChar = char1;
+            resultParts[resultIndex] = outputChar;
             prevConnectsRight = currentConnectsRight;
          end
       end
+
+      index = nextIndex;
    end
-   
+
    -- Reverse the parts and concatenate
-   local reversed = {};
-   for i = resultIndex - 1, 1, -1 do
-      reversed[#reversed + 1] = resultParts[i];
+   local left, right = 1, resultIndex;
+   while (left < right) do
+      resultParts[left], resultParts[right] = resultParts[right], resultParts[left];
+      left = left + 1;
+      right = right - 1;
    end
-   
-   local out = table.concat(reversed);
+
+   local out = table.concat(resultParts);
    if fixNumbers then
       out = AS_FixDigitRunsForRTL(out);
    end

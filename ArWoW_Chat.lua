@@ -128,7 +128,30 @@ local function ContainsArabic(text)
    return AS_ContainsArabic(text) and true or false
 end
 
+-- Size of the well-formed 1-3 byte character at pos (ASCII, Arabic letters, shaped presentation forms),
+-- by the same rules as AS_UTF8charbytes; nil for anything else, which is left to that guarded decoder.
+local function FastCharBytes(text, pos)
+   local lead = string.byte(text, pos)
+   if (not lead) then return nil end
+   if (lead <= 127) then return (lead > 0) and 1 or nil end
+   if (lead >= 194 and lead <= 223) then
+      local trail = string.byte(text, pos + 1)
+      return (trail and trail >= 128 and trail <= 191) and 2 or nil
+   end
+   if (lead >= 224 and lead <= 239) then
+      local second, third = string.byte(text, pos + 1, pos + 2)
+      if (not third or third < 128 or third > 191 or second > 191) then return nil end
+      if (lead == 224) then return (second >= 160) and 3 or nil end
+      if (lead == 237) then return (second >= 128 and second <= 159) and 3 or nil end
+      return (second >= 128) and 3 or nil
+   end
+   return nil
+end
+
 local function NextUtf8(text, pos)
+   local fastBytes = FastCharBytes(text, pos)
+   if (fastBytes) then return string.sub(text, pos, pos + fastBytes - 1), fastBytes, true end
+
    local ok, charbytes = pcall(AS_UTF8charbytes, text, pos)
    if (not ok or not charbytes or charbytes < 1) then 
       return "", 1, false 
@@ -257,8 +280,9 @@ local function ParseEntries(text)
    local entries, leadingSpaces, currentToken, pos, bytes = {}, "", "", 1, string.len(text or "")
    
    while (pos <= bytes) do
-      local markup, markupBytes = GetProtectedMarkup(text, pos)
-      
+      local markup, markupBytes
+      if (string.byte(text, pos) == 124) then markup, markupBytes = GetProtectedMarkup(text, pos) end -- 124 is "|"
+
       -- Handle UI Markup (Links, Colors, Textures) untouched
       if (markup and markupBytes and markupBytes > 0) then
          if (currentToken ~= "") then 
@@ -371,11 +395,23 @@ end
 -- ============================================================================
 local function Utf8Length(text)
    if (not text or text == "") then return 0 end
-   
-   local ok, length = pcall(AS_UTF8len, text)
-   if (ok and length) then return length end
-   
-   return string.len(text)
+
+   local bytes = string.len(text)
+   if (not string.find(text, "[\128-\255]")) then return bytes end
+
+   -- Count in place; a rare or malformed character hands the whole text to the guarded count below
+   local length, pos = 0, 1
+   while (pos <= bytes) do
+      local charbytes = FastCharBytes(text, pos)
+      if (not charbytes) then
+         local ok, counted = pcall(AS_UTF8len, text)
+         if (ok and counted) then return counted end
+         return bytes
+      end
+      length, pos = length + 1, pos + charbytes
+   end
+
+   return length
 end
 
 local function ResolveChatFrame(owner)
@@ -592,10 +628,6 @@ local function TrimText(text)
    return string.gsub(text, "%s+$", "")
 end
 
-local function Mod(value, divisor)
-   return value - math.floor(value / divisor) * divisor
-end
-
 local function EscapeLuaPattern(text)
    return string.gsub(text or "", "([%(%)%.%%%+%-%*%?%[%]%^%$])", "%%%1")
 end
@@ -644,11 +676,10 @@ local function AddonStringHash(text)
    local length = string.len(text or "")
 
    for index = 1, length, 3 do
-      counter = Mod(counter * 8161, 4294967279)
+      counter = (counter * 8161) % 4294967279
 
-      local byte1 = string.byte(text, index) or 0
-      local byte2 = string.byte(text, index + 1)
-      local byte3 = string.byte(text, index + 2)
+      local byte1, byte2, byte3 = string.byte(text, index, index + 2)
+      byte1 = byte1 or 0
 
       if (not byte2) then byte2 = length - index + 256 end
       if (not byte3) then byte3 = length - (index + 1) + 256 end
@@ -656,8 +687,12 @@ local function AddonStringHash(text)
       counter = counter + (byte1 * 16776193) + (byte2 * 8372226) + (byte3 * 3932164)
    end
 
-   return Mod(counter, 4294967291)
+   return counter % 4294967291
 end
+
+-- The player's name, race, class and sex do not change during a session, so that half of the lookup
+-- context is built once (when the character is known) and shared by every later lookup.
+local playerLookupContext
 
 local function BuildLookupContext(speakerName)
    local context = {
@@ -673,6 +708,13 @@ local function BuildLookupContext(speakerName)
    local speakerSeen, playerSeen = {}, {}
    UniqueInsert(context.speakerValues, speakerSeen, speakerName)
    UniqueInsert(context.speakerValues, speakerSeen, StripRealm(speakerName or ""))
+
+   if (playerLookupContext) then
+      context.isFemale, context.playerName = playerLookupContext.isFemale, playerLookupContext.playerName
+      context.raceArabic, context.classArabic = playerLookupContext.raceArabic, playerLookupContext.classArabic
+      context.playerValues = playerLookupContext.playerValues
+      return context
+   end
 
    local playerName = UnitName and UnitName("player") or ""
    context.playerName = StripRealm(playerName)
@@ -697,6 +739,8 @@ local function BuildLookupContext(speakerName)
 
    local playerSex = UnitSex and UnitSex("player") or 2
    context.isFemale = (playerSex == 3)
+
+   if (context.playerName ~= "" and classToken and englishRace) then playerLookupContext = context end
 
    return context
 end
@@ -1223,15 +1267,47 @@ local function ProcessBubbleRegion(frame, region)
    region.ArWoWBubbleGeneration = bubbleCacheGeneration
 end
 
+-- The periodic scan. A bubble frame keeps its font string for life, so the region found the first time is
+-- reused instead of walking the frame's backdrop and regions on every scan, and a hidden bubble is only
+-- visited once (to clear what was remembered about it) until it is shown again.
+local bubbleTextRegions, bubbleHiddenHandled = {}, {}
+
+local function ScanBubbleFrames()
+   if (not WorldFrame or not WorldFrame.GetNumChildren) then return end
+
+   local numChildren = WorldFrame:GetNumChildren()
+   if (numChildren < scannedWorldChildren) then scannedWorldChildren = 0 end
+   if (numChildren > scannedWorldChildren) then CollectNewBubbleFrames(WorldFrame:GetChildren()) end
+
+   for i = 1, #bubbleFrames do
+      local bubbleFrame = bubbleFrames[i]
+      local isShown = bubbleFrame:IsShown()
+      if (isShown or not bubbleHiddenHandled[bubbleFrame]) then
+         -- ElvUI-skinned bubbles carry their own text field, which is already a cheap lookup
+         local useCache = not bubbleFrame.isSkinnedElvUI
+         local textRegion = useCache and bubbleTextRegions[bubbleFrame] or nil
+         if (not textRegion) then
+            textRegion = GetBubbleTextRegion(bubbleFrame)
+            if (useCache) then bubbleTextRegions[bubbleFrame] = textRegion end
+         end
+         if (textRegion) then ProcessBubbleRegion(bubbleFrame, textRegion) end
+         bubbleHiddenHandled[bubbleFrame] = (not isShown) or nil
+      end
+   end
+end
+
 local function ProcessBubbleQueue(_, elapsed)
+   local throttle = (bubbleProcessorFrame.ArWoWThrottle or BUBBLE_SCAN_THROTTLE) - (elapsed or 0)
+   if (throttle > 0) then
+      bubbleProcessorFrame.ArWoWThrottle = throttle
+      return
+   end
+
    if (not IsEnabled()) then ResetBubbleQueue() return end
-   
-   bubbleProcessorFrame.ArWoWThrottle = (bubbleProcessorFrame.ArWoWThrottle or BUBBLE_SCAN_THROTTLE) - (elapsed or 0)
-   if (bubbleProcessorFrame.ArWoWThrottle > 0) then return end
-   
+
    bubbleProcessorFrame.ArWoWThrottle = BUBBLE_SCAN_THROTTLE
    PurgeBubbleCache()
-   IterateBubbleTextRegions(ProcessBubbleRegion)
+   ScanBubbleFrames()
 end
 -- ============================================================================
 -- Edit Box Hooks (RTL Emulation & Reshaping)
