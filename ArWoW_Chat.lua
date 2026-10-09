@@ -10,6 +10,7 @@ local chatPreviewFrames, chatPreviewTexts, chatPreviewCursors, chatNormalizeLock
 local bubbleProcessorFrame = CreateFrame("Frame")
 local recentBubbleTranslations = {}
 local bubbleCacheGeneration = 0
+local recentNpcTargets = {}
 local presentationToBaseMap, presentationLeadPattern
 local optionsPanel, optionsEnabledCheckbox, optionsNpcTranslationCheckbox, addonFrame
 local RefreshOptionsPanel, RefreshNpcTranslationEventRegistration
@@ -21,6 +22,7 @@ local WRAP_REFERENCE_FONT_SIZE = 12
 local WRAP_CHARACTER_LIMIT_STEP = 6
 local BUBBLE_SCAN_THROTTLE = 0.1
 local BUBBLE_CACHE_TTL = 8
+local NPC_TARGET_TTL = 10
 local HONOR_TEMPLATE_HASH = 4192543970
 
 -- All chat events that might receive Arabic text
@@ -662,6 +664,40 @@ local function IsHonorTemplate(text)
       or string.find(text or "", "^People of Stormwind! Bear witness today to the deeds of ", 1, false) ~= nil
 end
 
+-- Detects a name spoken directly to a player at the end of a sentence, e.g.
+-- "...ready for you, Theoctowar." so one %n entry matches every player.
+local function ExtractAddressedName(text)
+   return string.match(text or "", ",%s*(%u[%a']+)%.?$")
+end
+
+-- NPC chat events carry the name of the unit the line is aimed at as their
+-- fifth argument ("%s concocts a potion for Bob."). Remember it briefly so the
+-- name becomes %n wherever it sits in the sentence, including for bubbles.
+local function RememberNpcTarget(targetName, speakerName)
+   if (type(targetName) ~= "string") then return end
+   targetName = StripRealm(targetName)
+   if (string.len(targetName) < 2 or targetName == StripRealm(speakerName or "")) then return end
+
+   local now = GetTime()
+   for name, expiresAt in pairs(recentNpcTargets) do
+      if (expiresAt <= now) then recentNpcTargets[name] = nil end
+   end
+   recentNpcTargets[targetName] = now + NPC_TARGET_TTL
+end
+
+local function FindNpcTarget(text, targetName)
+   if (type(targetName) == "string") then
+      targetName = StripRealm(targetName)
+      if (string.len(targetName) >= 2 and string.find(text, targetName, 1, true)) then return targetName end
+   end
+
+   local now, found = GetTime(), nil
+   for name, expiresAt in pairs(recentNpcTargets) do
+      if (expiresAt > now and string.find(text, name, 1, true) and (not found or string.len(name) > string.len(found))) then found = name end
+   end
+   return found
+end
+
 local function NormalizeBubbleTranslationKey(text)
    local normalized = string.gsub(text or "", "|cn[%w_]+:", "")
    normalized = StripMarkup(normalized)
@@ -759,6 +795,10 @@ local function BuildBubbleHashTexts(baseText, context)
       end
    end
 
+   if (context.addressedName and context.addressedName ~= "" and string.find(baseText, context.addressedName, 1, true)) then
+      operations[#operations + 1] = { kind = "replace", value = context.addressedName, replacement = "%n" }
+   end
+
    local results, seen = {}, {}
    local function AddResult(text)
       text = TrimText(text or "")
@@ -781,14 +821,25 @@ local function BuildBubbleHashTexts(baseText, context)
    return results
 end
 
-local function BuildBubbleHashCandidates(sourceText, speakerName)
+local function BuildBubbleHashCandidates(sourceText, speakerName, targetName)
    local normalizedText = NormalizeBubbleTranslationKey(sourceText)
    if (normalizedText == "") then return nil, nil, nil end
 
    local context = BuildLookupContext(speakerName)
+   targetName = FindNpcTarget(normalizedText, targetName)
+   if (targetName == context.speakerName) then targetName = nil end
+   context.addressedName = targetName or ExtractAddressedName(normalizedText) or ""
    local hashTexts = BuildBubbleHashTexts(normalizedText, context)
    local speakerIsTimekeeper = IsTimekeeperSpeaker(context.speakerName)
    local candidates, seenHashes = {}, {}
+
+   -- Texts that still hold a player's name are looked up but never saved as missing.
+   local function ContainsPlayerName(text)
+      for _, value in ipairs(context.playerValues or {}) do
+         if (value ~= "" and string.find(text, value, 1, true)) then return true end
+      end
+      return context.addressedName ~= "" and string.find(text, context.addressedName, 1, true) ~= nil
+   end
 
    for i = 1, #hashTexts do
       local hashText = hashTexts[i]
@@ -799,7 +850,7 @@ local function BuildBubbleHashCandidates(sourceText, speakerName)
          local hashValue = IsHonorTemplate(hashText) and HONOR_TEMPLATE_HASH or AddonStringHash(hashText)
          if (not seenHashes[hashValue]) then
             seenHashes[hashValue] = true
-            candidates[#candidates + 1] = { hash = hashValue, text = hashText }
+            candidates[#candidates + 1] = { hash = hashValue, text = hashText, containsPlayerName = ContainsPlayerName(hashText) }
          end
       end
    end
@@ -813,7 +864,7 @@ local function RememberMissingBubbleHashes(hashCandidates)
    local store = EnsureDB().untranslatedBubbleHashes
    for i = 1, #hashCandidates do
       local candidate = hashCandidates[i]
-      if (candidate and candidate.hash and candidate.text and candidate.text ~= "" and not store[candidate.hash]) then
+      if (candidate and candidate.hash and candidate.text and candidate.text ~= "" and not candidate.containsPlayerName and not store[candidate.hash]) then
          store[candidate.hash] = candidate.text
       end
    end
@@ -835,13 +886,18 @@ local function ExpandBubbleTranslationText(text, context)
       output = string.gsub(output, "%%s", function() return context.speakerName end)
    end
 
+   if (context.addressedName and context.addressedName ~= "") then
+      output = string.gsub(output, "%%n", function() return context.addressedName end)
+   end
+
    return output
 end
 
-local function ResolveBubbleTranslation(sourceText, speakerName)
+local function ResolveBubbleTranslation(sourceText, speakerName, targetName)
    if (not IsNpcTranslationEnabled()) then return nil, nil, nil end
 
-   local hashCandidates, normalizedText, context = BuildBubbleHashCandidates(sourceText, speakerName)
+   RememberNpcTarget(targetName, speakerName)
+   local hashCandidates, normalizedText, context = BuildBubbleHashCandidates(sourceText, speakerName, targetName)
    if (not hashCandidates or #hashCandidates == 0) then return nil, nil, normalizedText end
 
    if (HasBubbleTranslationTable()) then
@@ -970,7 +1026,7 @@ end
 -- so the translation lookup and normalization are done once per event. GetTime() is fixed within a frame.
 local lastMessageEvent, lastMessageText, lastMessageSpeaker, lastMessageTime, lastMessageLogical
 
-local function ResolveLogicalMessage(eventName, messageText, speakerName)
+local function ResolveLogicalMessage(eventName, messageText, speakerName, targetName)
    local now = GetTime()
    if (now == lastMessageTime and eventName == lastMessageEvent and messageText == lastMessageText and speakerName == lastMessageSpeaker) then
       return lastMessageLogical
@@ -979,7 +1035,7 @@ local function ResolveLogicalMessage(eventName, messageText, speakerName)
    local logicalText
    if (IsNpcTranslationEvent(eventName) and IsNpcTranslationEnabled()) then
       local hashCandidates
-      logicalText, hashCandidates = ResolveBubbleTranslation(messageText, speakerName)
+      logicalText, hashCandidates = ResolveBubbleTranslation(messageText, speakerName, targetName)
       if (logicalText and logicalText ~= "") then
          RememberBubbleTranslation(messageText, logicalText)
       else
@@ -996,8 +1052,8 @@ local function ResolveLogicalMessage(eventName, messageText, speakerName)
    return logicalText
 end
 
-local function BuildWrappedMessage(chatFrame, eventName, messageText, speakerName, languageName, channelName)
-   local logicalText = ResolveLogicalMessage(eventName, messageText, speakerName)
+local function BuildWrappedMessage(chatFrame, eventName, messageText, speakerName, languageName, channelName, targetName)
+   local logicalText = ResolveLogicalMessage(eventName, messageText, speakerName, targetName)
    if (not logicalText) then return nil end
 
    local prefixText = BuildVisiblePrefix(chatFrame, eventName, speakerName, languageName, channelName)
@@ -1784,7 +1840,7 @@ end
 local function ArabicChatFilter(self, event, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12)
    if (not IsEnabled()) then return false end
    
-   local shapedText = BuildWrappedMessage(self, event, arg1, arg2, arg3, arg4)
+   local shapedText = BuildWrappedMessage(self, event, arg1, arg2, arg3, arg4, arg5)
    if (shapedText and shapedText ~= arg1) then 
       return false, shapedText, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12 
    end
@@ -2101,7 +2157,7 @@ RefreshNpcTranslationEventRegistration = function()
    end
 end
 
-addonFrame:SetScript("OnEvent", function(self, event, arg1, arg2)
+addonFrame:SetScript("OnEvent", function(self, event, arg1, arg2, _, _, arg5)
    if (event == "ADDON_LOADED") then
       if (arg1 == ADDON_NAME) then
          EnsureDB() 
@@ -2138,7 +2194,7 @@ addonFrame:SetScript("OnEvent", function(self, event, arg1, arg2)
    elseif (IsNpcTranslationEvent(event)) then
       if (IsEnabled() and IsNpcTranslationEnabled()) then
          -- Usually already resolved by the chat filters this frame; otherwise this does the lookup
-         ResolveLogicalMessage(event, arg1, arg2)
+         ResolveLogicalMessage(event, arg1, arg2, arg5)
       end
    elseif (event == "PLAYER_LOGIN") then
       CreateOptionsPanel()
